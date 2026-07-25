@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open it in any browser. The Markdown stays the maintainable source in the repo.
   swift-markdown is scoped to the build tool's targets and is never linked into
   the distributed executable.
+- **Per-shortcut execution limits:** optional `timeout_seconds` (5–300s, default 120) and `max_output_bytes` (1 KB–100 MB, default 10 MB) on each allowlist entry; omitting them keeps the secure defaults, and out-of-range values are clamped to the nearest bound and reported (in `list_shortcuts`, in the run result, and in the server log).
 
 ### Changed
 
@@ -45,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Honest consent model:** SECURITY.md now states the `side_effect`/`confirm` gate
   is mediated by the MCP client — the headless server cannot itself verify user
   consent.
+- **Subprocess hardening (CWE-400/833):** the shortcuts runner drains stdout/stderr
+  concurrently, enforces a wall-clock timeout (SIGTERM then SIGKILL), and caps
+  captured output — so a hung or chatty shortcut can't deadlock the pipes, wedge the
+  server, or exhaust memory. `SIGPIPE` is ignored so writes to a closed pipe error
+  instead of crashing.
 
 ## [0.1.0] - 2026-07-25
 

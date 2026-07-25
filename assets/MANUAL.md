@@ -106,7 +106,8 @@ It's a JSON file. Each entry is keyed by the **exact name** of a Shortcut, with 
     "BatteryLevel": {
       "description": "Report the current battery percentage.",
       "input": "none",
-      "side_effect": false
+      "side_effect": false,
+      "timeout_seconds": 15
     }
   }
 }
@@ -121,6 +122,8 @@ It's a JSON file. Each entry is keyed by the **exact name** of a Shortcut, with 
 | `input` | text | A hint about what to send: `"json"`, `"text"`, or `"none"`. Optional. |
 | `schema` | object | For JSON input, a map of field name → description. Optional; documentation only. |
 | `side_effect` | true/false | `true` if the shortcut **changes something** (sends a message, toggles a light, edits a note). When `true`, the assistant must get your explicit OK before running it. Use `false` only for read-only "just tell me something" shortcuts. **If omitted, it defaults to `true`** (confirmation required). |
+| `timeout_seconds` | number | Max seconds the shortcut may run before it's stopped. Optional; default **120**, allowed **5–300** (values outside are clamped). |
+| `max_output_bytes` | number | Max bytes of output captured before the result is truncated. Optional; default **10000000** (~10 MB), allowed **1024–100000000** (1 KB–100 MB, clamped). |
 
 ### Changing the list
 
@@ -187,13 +190,25 @@ Think of it like leaving a voicemail for a robot: it can follow a fixed script p
 
 > Tip: any action that has an **"Ask Each Time"** magic-variable option should instead be set to a **fixed value** or a value **taken from the Shortcut Input**.
 
+### Time and output limits
+
+Every run has two safety limits. Sensible **defaults apply automatically**, and you can **override them per shortcut** in the config (see the field reference in §3):
+
+- **Time limit — default 120 seconds** (`timeout_seconds`; allowed range **5–300**). If a shortcut hasn't finished in this time, the assistant stops it. This mostly catches a shortcut stuck waiting on something (see the headless rule above) or doing too much work.
+- **Output limit — default ~10 MB** (`max_output_bytes`; allowed range **1024–100000000** bytes, i.e. 1 KB–100 MB). Output beyond the limit is truncated.
+
+Values outside the allowed range are **clamped** to the nearest bound, so you can't accidentally disable a limit. When a limit kicks in, the assistant sees a short note (e.g. *"timed out after 120s"* or *"output truncated"*). Keep most shortcuts quick and their output modest, and raise a limit only for the specific shortcut that needs it.
+
+If you set a value outside the allowed range, it's clamped **and reported**, so you'll know: it appears next to the shortcut when you ask the assistant to *"list my shortcuts"*, in the result when that shortcut runs, and in the server log.
+
 ---
 
 ## 6. Troubleshooting
 
 - **Claude doesn't see the tool.** Fully quit and reopen Claude Desktop. Double-check the `command` path points at `…/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP`. Check the log at `~/Library/Logs/Claude/mcp-server-run-shortcuts.log`.
 - **"… is not on the allowlist."** The shortcut name isn't in your `.config`, or the spelling doesn't match. Add/fix it, then restart Claude.
-- **It runs but hangs / times out.** The shortcut almost certainly isn't headless (§5) — it's waiting for a person. Remove the interactive action.
+- **It runs but hangs, then stops after a while.** The shortcut almost certainly isn't headless (§5) — it's waiting for a person. Remove the interactive action. (The default time limit is 120s; a genuinely slow shortcut can raise it up to 300s with `timeout_seconds` — see "Time and output limits" in §5.)
+- **The result looks cut off, or mentions "truncated."** The shortcut returned more than the output limit (default ~10 MB). Have it return a smaller, more focused result, or raise `max_output_bytes` (up to 100 MB) for that shortcut.
 - **A "tell me…" shortcut returns nothing.** It's missing a **Stop and Output** / final **Text** action (§4.3).
 - **Permission errors.** Check **System Settings ▸ Privacy & Security ▸ Automation** and the relevant app (Notes, Calendar, etc.).
 

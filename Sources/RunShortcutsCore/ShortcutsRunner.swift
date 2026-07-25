@@ -63,16 +63,73 @@ public struct RunOutput: Codable, Sendable {
     }
 }
 
+/// Thread-safe, size-capped accumulator for bytes read from a child's output
+/// stream. Bounds memory use (CWE-400): once `cap` bytes are held, further bytes
+/// are dropped and `truncated` becomes `true`.
+private final class OutputCollector: @unchecked Sendable {
+    private let cap: Int
+    private let lock = NSLock()
+    private var storage = Data()
+    private var didTruncate = false
+
+    /// Creates a collector.
+    /// - Parameter cap: (`Int`) Maximum bytes to retain.
+    init(cap: Int) { self.cap = cap }
+
+    /// Appends a chunk, keeping at most `cap` total bytes.
+    /// - Parameter chunk: (`Data`) Newly read bytes.
+    func append(_ chunk: Data) {
+        lock.lock(); defer { lock.unlock() }
+        guard storage.count < cap else { didTruncate = true; return }
+        let room = cap - storage.count
+        if chunk.count <= room {
+            storage.append(chunk)
+        } else {
+            storage.append(chunk.prefix(room))
+            didTruncate = true
+        }
+    }
+
+    /// (`Data`) Snapshot of the captured bytes.
+    var data: Data { lock.lock(); defer { lock.unlock() }; return storage }
+
+    /// (`Bool`) Whether any bytes were dropped because the cap was reached.
+    var truncated: Bool { lock.lock(); defer { lock.unlock() }; return didTruncate }
+}
+
 /// Runs the macOS `shortcuts` CLI as a subprocess. Stateless and `Sendable`; the
 /// executable path is configurable to ease testing.
 public struct ShortcutsRunner: Sendable {
+    /// (`TimeInterval`) Default per-run timeout applied when a shortcut specifies none.
+    public static let defaultTimeout: TimeInterval = 120
+
+    /// (`ClosedRange<TimeInterval>`) Allowed bounds (seconds) for a configured timeout.
+    public static let timeoutRange: ClosedRange<TimeInterval> = 5...300
+
+    /// (`Int`) Default per-stream output cap applied when a shortcut specifies none.
+    public static let defaultMaxOutputBytes: Int = 10_000_000
+
+    /// (`ClosedRange<Int>`) Allowed bounds (bytes) for a configured output cap: 1 KB–100 MB.
+    public static let outputBytesRange: ClosedRange<Int> = 1_024...100_000_000
+
     /// (`String`) Path to the `shortcuts` binary to invoke.
     public let executable: String
 
+    /// (`TimeInterval`) Wall-clock limit for a single invocation before the child is terminated.
+    public let timeout: TimeInterval
+
+    /// (`Int`) Maximum bytes captured from stdout and from stderr (each); further output is dropped.
+    public let maxOutputBytes: Int
+
     /// Creates a runner.
-    /// - Parameter executable: (`String`) Path to the `shortcuts` binary; defaults to `/usr/bin/shortcuts`.
-    public init(executable: String = "/usr/bin/shortcuts") {
+    /// - Parameters:
+    ///   - executable: (`String`) Path to the `shortcuts` binary; defaults to `/usr/bin/shortcuts`.
+    ///   - timeout: (`TimeInterval`) Seconds before a running invocation is force-terminated; defaults to `defaultTimeout` (120). Not clamped here — bounds are applied by the allowlist policy layer.
+    ///   - maxOutputBytes: (`Int`) Per-stream cap on captured output in bytes; defaults to `defaultMaxOutputBytes` (10 MB). Not clamped here.
+    public init(executable: String = "/usr/bin/shortcuts", timeout: TimeInterval = ShortcutsRunner.defaultTimeout, maxOutputBytes: Int = ShortcutsRunner.defaultMaxOutputBytes) {
         self.executable = executable
+        self.timeout = timeout
+        self.maxOutputBytes = maxOutputBytes
     }
 
     /// Lists the shortcuts installed on this machine (`shortcuts list`).
@@ -96,13 +153,20 @@ public struct ShortcutsRunner: Sendable {
         try invoke(arguments: ["run", name], input: input)
     }
 
-    /// Spawns `executable` with the given arguments, feeds `input` to stdin, and captures its output.
+    /// Spawns `executable` with the given arguments, feeds `input` to stdin, captures
+    /// its output, and enforces a wall-clock timeout and a per-stream output cap.
+    ///
+    /// stdout and stderr are drained concurrently to avoid a pipe-buffer deadlock
+    /// (CWE-833); stdin is written on a background queue so a full pipe can't block;
+    /// captured output is capped to bound memory (CWE-400); and a child that outlives
+    /// `timeout` is terminated (SIGTERM, then SIGKILL after a short grace). Internal
+    /// (not private) so it can be unit-tested with arbitrary executables/arguments.
     /// - Parameters:
     ///   - arguments: (`[String]`) Argument vector passed to the process (no shell involved).
     ///   - input: (`String?`) Data written to the child's stdin as UTF-8; `nil` to write nothing.
-    /// - Returns: (`ShortcutResult`) The captured exit status and streams.
+    /// - Returns: (`ShortcutResult`) The captured exit status and streams; truncation/timeout notes are appended to stderr.
     /// - Throws: An error from `Process.run()` if the subprocess cannot be launched.
-    private func invoke(arguments: [String], input: String?) throws -> ShortcutResult {
+    func invoke(arguments: [String], input: String?) throws -> ShortcutResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -114,21 +178,79 @@ public struct ShortcutsRunner: Sendable {
         process.standardError = stderrPipe
         process.standardInput = stdinPipe
 
+        // Signaled by the termination handler when the child exits.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+
         try process.run()
 
-        if let input, let data = input.data(using: .utf8) {
-            stdinPipe.fileHandleForWriting.write(data)
-        }
-        try? stdinPipe.fileHandleForWriting.close()
+        let queue = DispatchQueue(label: "dev.grumptech.runshortcutsmcp.runner", attributes: .concurrent)
+        let io = DispatchGroup()
+        let outCollector = OutputCollector(cap: maxOutputBytes)
+        let errCollector = OutputCollector(cap: maxOutputBytes)
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        // Each handle is used only inside its own task below.
+        let inHandle = stdinPipe.fileHandleForWriting
+        let outHandle = stdoutPipe.fileHandleForReading
+        let errHandle = stderrPipe.fileHandleForReading
+
+        // Write stdin on a background queue so a full pipe can't block the caller.
+        queue.async {
+            if let input, let data = input.data(using: .utf8) {
+                try? inHandle.write(contentsOf: data)
+            }
+            try? inHandle.close()
+        }
+
+        // Drain both streams concurrently until EOF.
+        io.enter()
+        queue.async {
+            while true {
+                let chunk = outHandle.availableData
+                if chunk.isEmpty { break }
+                outCollector.append(chunk)
+            }
+            io.leave()
+        }
+        io.enter()
+        queue.async {
+            while true {
+                let chunk = errHandle.availableData
+                if chunk.isEmpty { break }
+                errCollector.append(chunk)
+            }
+            io.leave()
+        }
+
+        // Enforce the timeout: SIGTERM, then SIGKILL after a short grace.
+        var timedOut = false
+        if exited.wait(timeout: .now() + timeout) == .timedOut {
+            timedOut = true
+            process.terminate()
+            if exited.wait(timeout: .now() + 2) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = exited.wait(timeout: .now() + 2)
+            }
+        }
+
+        // Readers finish once the child's pipe ends close (on exit/kill).
+        io.wait()
+
+        var stderrText = String(data: errCollector.data, encoding: .utf8) ?? ""
+        if outCollector.truncated {
+            stderrText += "\n[runner] stdout truncated at \(maxOutputBytes) bytes."
+        }
+        if errCollector.truncated {
+            stderrText += "\n[runner] stderr truncated at \(maxOutputBytes) bytes."
+        }
+        if timedOut {
+            stderrText += "\n[runner] timed out after \(Int(timeout))s; process terminated."
+        }
 
         return ShortcutResult(
             exitCode: process.terminationStatus,
-            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
-            stderr: String(data: stderrData, encoding: .utf8) ?? ""
+            stdout: String(data: outCollector.data, encoding: .utf8) ?? "",
+            stderr: stderrText
         )
     }
 }

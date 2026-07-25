@@ -126,4 +126,72 @@ final class AllowlistTests: XCTestCase {
             AllowlistLocator.resolve(arguments: [], environment: [:], discoveredConfig: { nil })
         )
     }
+
+    /// Verifies per-shortcut `timeout_seconds`/`max_output_bytes` decode, and that the
+    /// resolved values fall back to defaults and are clamped to the allowed bounds.
+    func testPerShortcutLimitsDecodeAndClamp() throws {
+        let json = """
+        {
+          "shortcuts": {
+            "Quick":    { "description": "in range",   "timeout_seconds": 30,   "max_output_bytes": 2048 },
+            "TooBig":   { "description": "over range",  "timeout_seconds": 9999, "max_output_bytes": 999999999 },
+            "TooSmall": { "description": "under range", "timeout_seconds": 1,    "max_output_bytes": 10 },
+            "Plain":    { "description": "no limits" }
+          }
+        }
+        """
+        let a = try Allowlist.decode(Data(json.utf8))
+
+        // Raw decoded values.
+        XCTAssertEqual(a.entry(for: "Quick")?.timeoutSeconds, 30)
+        XCTAssertEqual(a.entry(for: "Quick")?.maxOutputBytes, 2048)
+
+        // In-range resolves unchanged.
+        XCTAssertEqual(a.timeout(for: "Quick"), 30)
+        XCTAssertEqual(a.maxOutputBytes(for: "Quick"), 2048)
+
+        // Over-range clamps to the max.
+        XCTAssertEqual(a.timeout(for: "TooBig"), 300)
+        XCTAssertEqual(a.maxOutputBytes(for: "TooBig"), 100_000_000)
+
+        // Under-range clamps to the min.
+        XCTAssertEqual(a.timeout(for: "TooSmall"), 5)
+        XCTAssertEqual(a.maxOutputBytes(for: "TooSmall"), 1_024)
+
+        // Missing values fall back to the hard-coded defaults.
+        XCTAssertEqual(a.timeout(for: "Plain"), 120)
+        XCTAssertEqual(a.maxOutputBytes(for: "Plain"), 10_000_000)
+
+        // An unknown (non-allowlisted) name also yields the defaults.
+        XCTAssertEqual(a.timeout(for: "Nope"), 120)
+        XCTAssertEqual(a.maxOutputBytes(for: "Nope"), 10_000_000)
+    }
+
+    /// Verifies out-of-range limits produce warnings (per-entry, aggregated, and in the
+    /// `list_shortcuts` payload) while in-range/absent limits produce none.
+    func testOutOfRangeLimitsProduceWarnings() throws {
+        let json = """
+        {
+          "shortcuts": {
+            "Bad":  { "description": "x", "timeout_seconds": 9999, "max_output_bytes": 10 },
+            "Good": { "description": "y", "timeout_seconds": 60 }
+          }
+        }
+        """
+        let a = try Allowlist.decode(Data(json.utf8))
+
+        // Per-entry: Bad has two issues, Good none.
+        XCTAssertEqual(try XCTUnwrap(a.entry(for: "Bad")).limitWarnings().count, 2)
+        XCTAssertTrue(try XCTUnwrap(a.entry(for: "Good")).limitWarnings().isEmpty)
+
+        // Aggregated warnings are name-prefixed and only for Bad.
+        let all = a.limitWarnings()
+        XCTAssertEqual(all.count, 2)
+        XCTAssertTrue(all.allSatisfy { $0.contains("Bad") })
+
+        // list_shortcuts payload carries configWarning for Bad, not Good.
+        let items = try JSONDecoder().decode([ShortcutDescription].self, from: Data(a.describe(installed: []).utf8))
+        XCTAssertNotNil(try XCTUnwrap(items.first { $0.name == "Bad" }).configWarning)
+        XCTAssertNil(try XCTUnwrap(items.first { $0.name == "Good" }).configWarning)
+    }
 }
