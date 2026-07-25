@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   swift-markdown is scoped to the build tool's targets and is never linked into
   the distributed executable.
 
+### Changed
+
+- **Fail-closed `side_effect` default:** an allowlist entry that omits `side_effect`
+  is now treated as `true` (confirmation required) instead of `false`.
+- **Allowlist resolution fails closed:** removed the working-directory
+  `allowlist.json` fallback. If no allowlist is configured (via `--allowlist`, the
+  `RUNSHORTCUTS_ALLOWLIST` env var, or the per-user config), the server refuses to
+  start rather than trusting the current directory.
+
+### Security
+
+- **Argument-injection guard (CWE-88):** allowlist names that are empty or begin
+  with `-` are rejected at load, so a crafted name can't be passed as an option to
+  the `shortcuts` CLI.
+- **Honest consent model:** SECURITY.md now states the `side_effect`/`confirm` gate
+  is mediated by the MCP client — the headless server cannot itself verify user
+  consent.
+
 ## [0.1.0] - 2026-07-25
 
 ### Added

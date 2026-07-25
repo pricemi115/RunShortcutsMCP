@@ -18,42 +18,36 @@ public enum AllowlistLocator {
     /// (`String`) Environment variable consulted when no `--allowlist` argument is given.
     public static let environmentKey = "RUNSHORTCUTS_ALLOWLIST"
 
-    /// (`String`) Default filename used when nothing else resolves (relative to the working directory).
-    public static let defaultFilename = "allowlist.json"
-
     /// (`String`) The expected config filename: the running executable's name plus `.config` (e.g. `RunShortcutsMCP.config`).
     public static var configFileName: String {
         "\(ProcessInfo.processInfo.processName).config"
     }
 
     /// Resolves the allowlist path from CLI arguments, environment, and (optionally) an
-    /// auto-discovered config file.
+    /// auto-discovered config file. Fails closed: if nothing resolves it returns `nil`,
+    /// and the server refuses to start rather than trusting the working directory.
     ///
     /// Precedence: `--allowlist <path>` argument → `RUNSHORTCUTS_ALLOWLIST`
-    /// environment variable → `discoveredConfig()` (an existing config found on disk) →
-    /// the default `"allowlist.json"`.
+    /// environment variable → `discoveredConfig()` (an existing config found on disk).
     /// - Parameters:
     ///   - arguments: (`[String]`) Process arguments (excluding the executable name).
     ///   - environment: (`[String: String]`) The process environment map.
     ///   - discoveredConfig: (`() -> String?`) Supplies the path of an auto-discovered
     ///     config **only if it exists**, otherwise `nil`. Injected so the core stays
     ///     pure/testable; defaults to a closure returning `nil`.
-    /// - Returns: (`String`) The chosen allowlist path; never empty.
+    /// - Returns: (`String?`) The chosen allowlist path, or `nil` if none is configured.
     public static func resolve(
         arguments: [String],
         environment: [String: String],
         discoveredConfig: () -> String? = { nil }
-    ) -> String {
+    ) -> String? {
         if let index = arguments.firstIndex(of: "--allowlist"), index + 1 < arguments.count {
             return arguments[index + 1]
         }
         if let path = environment[environmentKey], !path.isEmpty {
             return path
         }
-        if let found = discoveredConfig() {
-            return found
-        }
-        return defaultFilename
+        return discoveredConfig()
     }
 
     /// The auto-discovered config path: the per-user Application Support location if

@@ -116,11 +116,11 @@ It's a JSON file. Each entry is keyed by the **exact name** of a Shortcut, with 
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| *(key)* | text | The **exact** Shortcut name, matching the Shortcuts app character-for-character. |
+| *(key)* | text | The **exact** Shortcut name, matching the Shortcuts app character-for-character. Must not be empty or begin with `-`. |
 | `description` | text | Plain-English summary of what the shortcut does. The assistant sees this. |
 | `input` | text | A hint about what to send: `"json"`, `"text"`, or `"none"`. Optional. |
 | `schema` | object | For JSON input, a map of field name → description. Optional; documentation only. |
-| `side_effect` | true/false | `true` if the shortcut **changes something** (sends a message, toggles a light, edits a note). When `true`, the assistant must get your explicit OK before running it. Use `false` only for read-only "just tell me something" shortcuts. |
+| `side_effect` | true/false | `true` if the shortcut **changes something** (sends a message, toggles a light, edits a note). When `true`, the assistant must get your explicit OK before running it. Use `false` only for read-only "just tell me something" shortcuts. **If omitted, it defaults to `true`** (confirmation required). |
 
 ### Changing the list
 

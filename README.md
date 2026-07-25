@@ -62,7 +62,8 @@ The server resolves its allowlist path in this order:
 2. `RUNSHORTCUTS_ALLOWLIST` environment variable,
 3. **Per-user config** — `~/Library/Application Support/<bundle-id>/<AppName>.config` (e.g. `…/dev.grumptech.runshortcutsmcp/RunShortcutsMCP.config`). The bundle id is read at runtime from `Bundle.main`, so it always matches the signed identity. This is the recommended default.
 4. **Next to the app** — `<AppName>.config` beside the `.app` bundle (single-user convenience fallback).
-5. `allowlist.json` in the working directory (last resort).
+
+If none of these resolve, the server **fails closed** — it refuses to start rather than falling back to an `allowlist.json` in the current working directory.
 
 The deployable inputs live in `assets/` (`MANUAL.md`, `RunShortcutsMCP.config.example`, `TagNote.shortcut`); the build scripts render the manual to `MANUAL.html` and bundle everything into the app and the installer. See `assets/MANUAL.md` for the end-user walkthrough.
 

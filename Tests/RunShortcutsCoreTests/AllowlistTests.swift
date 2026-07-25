@@ -47,12 +47,12 @@ final class AllowlistTests: XCTestCase {
         XCTAssertEqual(allowlist.entry(for: "TagNote")?.schema?["tag"], "string (name, no #)")
     }
 
-    /// Verifies `side_effect` decodes when present and defaults to `false` when absent.
+    /// Verifies `side_effect` decodes when present and defaults to `true` (fail-closed) when absent.
     /// - Throws: Rethrows decoding errors from `makeAllowlist`.
-    func testSideEffectDefaultsToFalse() throws {
+    func testSideEffectDefaultsToTrueWhenAbsent() throws {
         let allowlist = try makeAllowlist()
         XCTAssertTrue(allowlist.entry(for: "TagNote")?.sideEffect == true)
-        XCTAssertFalse(allowlist.entry(for: "WordOfTheDay")?.sideEffect == true)
+        XCTAssertTrue(allowlist.entry(for: "WordOfTheDay")?.sideEffect == true)
     }
 
     /// Verifies unknown names are denied (default-deny).
@@ -75,8 +75,8 @@ final class AllowlistTests: XCTestCase {
         XCTAssertFalse(word.installed)
     }
 
-    /// Verifies path resolution precedence: `--allowlist` argument, then env var, then default.
-    func testLocatorPrefersArgumentThenEnvThenDefault() {
+    /// Verifies path resolution precedence: `--allowlist` argument, then env var, then nil (fail-closed).
+    func testLocatorPrefersArgumentThenEnvThenNil() {
         XCTAssertEqual(
             AllowlistLocator.resolve(arguments: ["--allowlist", "/tmp/a.json"], environment: [:]),
             "/tmp/a.json"
@@ -85,10 +85,20 @@ final class AllowlistTests: XCTestCase {
             AllowlistLocator.resolve(arguments: [], environment: ["RUNSHORTCUTS_ALLOWLIST": "/tmp/b.json"]),
             "/tmp/b.json"
         )
-        XCTAssertEqual(
-            AllowlistLocator.resolve(arguments: [], environment: [:]),
-            "allowlist.json"
+        XCTAssertNil(
+            AllowlistLocator.resolve(arguments: [], environment: [:])
         )
+    }
+
+    /// Verifies a shortcut name that is empty or begins with `-` (argument-injection
+    /// risk, CWE-88) is rejected at decode time.
+    func testRejectsShortcutNameStartingWithHyphen() {
+        let bad = """
+        { "shortcuts": { "--output-path=/tmp/x": { "description": "evil" } } }
+        """
+        XCTAssertThrowsError(try Allowlist.decode(Data(bad.utf8))) { error in
+            XCTAssertEqual(error as? AllowlistError, .invalidShortcutName("--output-path=/tmp/x"))
+        }
     }
 
     /// Verifies the auto-discovered config is used when present but is outranked by
@@ -111,10 +121,9 @@ final class AllowlistTests: XCTestCase {
             AllowlistLocator.resolve(arguments: [], environment: ["RUNSHORTCUTS_ALLOWLIST": "/tmp/b.json"], discoveredConfig: discovered),
             "/tmp/b.json"
         )
-        // Falls through to default when nothing is discovered.
-        XCTAssertEqual(
-            AllowlistLocator.resolve(arguments: [], environment: [:], discoveredConfig: { nil }),
-            "allowlist.json"
+        // Fails closed (nil) when nothing is discovered.
+        XCTAssertNil(
+            AllowlistLocator.resolve(arguments: [], environment: [:], discoveredConfig: { nil })
         )
     }
 }

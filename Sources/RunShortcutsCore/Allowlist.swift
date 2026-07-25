@@ -34,15 +34,17 @@ public struct AllowlistEntry: Codable, Equatable, Sendable {
     ///   - description: (`String`) Human-readable explanation of the shortcut.
     ///   - input: (`String?`) Expected input-shape hint; defaults to `nil`.
     ///   - schema: (`[String: String]?`) Field → description map for structured input; defaults to `nil`.
-    ///   - sideEffect: (`Bool`) Whether the shortcut changes state; defaults to `false`.
-    public init(description: String, input: String? = nil, schema: [String: String]? = nil, sideEffect: Bool = false) {
+    ///   - sideEffect: (`Bool`) Whether the shortcut changes state; defaults to `true` (fail-closed).
+    public init(description: String, input: String? = nil, schema: [String: String]? = nil, sideEffect: Bool = true) {
         self.description = description
         self.input = input
         self.schema = schema
         self.sideEffect = sideEffect
     }
 
-    /// Decodes an entry from JSON, defaulting `side_effect` to `false` when the key is absent.
+    /// Decodes an entry from JSON, defaulting `side_effect` to `true` when the key is
+    /// absent (fail-closed: an unmarked shortcut is treated as state-changing and so
+    /// requires confirmation).
     /// - Parameter decoder: (`Decoder`) The decoder positioned at a single entry object.
     /// - Throws: `DecodingError` if the required `description` field is missing or any field has the wrong type.
     public init(from decoder: Decoder) throws {
@@ -50,7 +52,22 @@ public struct AllowlistEntry: Codable, Equatable, Sendable {
         description = try c.decode(String.self, forKey: .description)
         input = try c.decodeIfPresent(String.self, forKey: .input)
         schema = try c.decodeIfPresent([String: String].self, forKey: .schema)
-        sideEffect = try c.decodeIfPresent(Bool.self, forKey: .sideEffect) ?? false
+        sideEffect = try c.decodeIfPresent(Bool.self, forKey: .sideEffect) ?? true
+    }
+}
+
+/// Errors raised while loading or validating an allowlist.
+public enum AllowlistError: Error, CustomStringConvertible, Equatable {
+    /// A shortcut name is empty or begins with `-`, which the `shortcuts` CLI would
+    /// misparse as a command-line option (CWE-88 argument injection).
+    case invalidShortcutName(String)
+
+    /// (`String`) Human-readable description of the error.
+    public var description: String {
+        switch self {
+        case .invalidShortcutName(let name):
+            return "Invalid shortcut name '\(name)': names must not be empty or begin with '-'."
+        }
     }
 }
 
@@ -77,6 +94,9 @@ public struct Allowlist: Equatable, Sendable {
     /// - Throws: `DecodingError` if the JSON is malformed or does not match the expected shape.
     public static func decode(_ data: Data) throws -> Allowlist {
         let file = try JSONDecoder().decode(File.self, from: data)
+        for name in file.shortcuts.keys where name.isEmpty || name.hasPrefix("-") {
+            throw AllowlistError.invalidShortcutName(name)
+        }
         return Allowlist(shortcuts: file.shortcuts)
     }
 

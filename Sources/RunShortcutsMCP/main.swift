@@ -43,11 +43,13 @@ if let configDirectory = ConfigProvisioner.applicationSupportDirectory(bundleID:
     )
 }
 
-let allowlistPath = AllowlistLocator.resolve(
+guard let allowlistPath = AllowlistLocator.resolve(
     arguments: Array(CommandLine.arguments.dropFirst()),
     environment: ProcessInfo.processInfo.environment,
     discoveredConfig: { AllowlistLocator.discoveredConfig() }
-)
+) else {
+    fail("RunShortcutsMCP: no allowlist configured. Provide --allowlist <path>, set RUNSHORTCUTS_ALLOWLIST, or install the per-user config at ~/Library/Application Support/<bundle-id>/RunShortcutsMCP.config.")
+}
 
 let allowlist: Allowlist
 do {

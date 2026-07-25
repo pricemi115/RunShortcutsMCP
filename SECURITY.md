@@ -37,8 +37,13 @@ when assessing reports:
 
 - **Default-deny allowlist.** The server runs **only** shortcuts explicitly
   listed in the user's config file; anything else is refused.
-- **Side-effect gate.** Shortcuts flagged `side_effect` refuse to run unless the
-  caller passes `confirm=true`, so an agent must obtain user confirmation first.
+- **Side-effect gate (client-mediated consent).** Shortcuts flagged `side_effect`
+  refuse to run unless the *caller* passes `confirm=true`. The server is headless
+  and cannot itself verify that a human approved — enforcing genuine user consent
+  before asserting `confirm=true` is the MCP client's responsibility. The gate
+  bounds *which* runs require that assertion; it does not independently authenticate
+  the user. An entry whose `side_effect` is unspecified is treated as `true`
+  (confirmation required) by default.
 - **No shell interpolation.** The `shortcuts` binary is invoked with an argument
   vector via `Process`, never by building a shell string, so shortcut names and
   input cannot inject shell commands.
