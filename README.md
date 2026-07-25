@@ -166,3 +166,10 @@ Prefer Xcode's build system? Open `Package.swift` directly in Xcode (File ▸ Op
 - **GUI flash**: `shortcuts run` can briefly surface the Shortcuts app. Keep allowlisted shortcuts headless-safe (no interactive prompts) so runs don't hang.
 - **Blocking I/O**: the process runner reads output synchronously. Fine for small results; revisit if a shortcut streams large output.
 - **Notarization**: only needed to distribute to other Macs. For local use, a Developer ID signature is enough.
+
+## License
+
+Licensed under the **Apache License 2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+You may use, modify, and redistribute this software, including for commercial
+purposes, free of charge. See [`CHANGELOG.md`](CHANGELOG.md) for release history
+and [`SECURITY.md`](SECURITY.md) to report vulnerabilities.

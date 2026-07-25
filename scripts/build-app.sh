@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
 # Builds the RunShortcutsMCP executable and wraps it in a .app bundle so macOS

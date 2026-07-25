@@ -1,0 +1,11 @@
+RunShortcutsMCP
+Copyright 2026 GrumpTech (https://grumptech.dev)
+
+This product includes software developed by GrumpTech.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file for the
+full license text.
+
+This software depends on the Model Context Protocol Swift SDK
+(https://github.com/modelcontextprotocol/swift-sdk), which is licensed under
+the Apache License, Version 2.0 (with earlier portions under the MIT License).
