@@ -34,6 +34,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
 
+# Stamp the marketing version from the single-source VERSION file into the bundle.
+VERSION_STR="$(tr -d ' \t\r\n' < VERSION)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION_STR" "$APP/Contents/Info.plist"
+echo "Stamped version: $VERSION_STR"
+
 # Bundle the (HTML) manual + example config so the app can self-provision them
 # into the per-user config folder on first run. Copied before signing so they're
 # inside the signed bundle.

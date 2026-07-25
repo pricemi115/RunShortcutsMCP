@@ -36,6 +36,11 @@ generated HTML. Keep the manual to the Markdown constructs the renderer supports
 (headings, lists, tables, code, block quotes, links, emphasis); the renderer lives
 in `Sources/MarkdownHTML` if you need to extend it.
 
+**Versioning:** the version is single-sourced in the root **`VERSION`** file. To
+bump it, edit `VERSION` and add a `CHANGELOG.md` entry — don't hand-edit version
+strings in `Info.plist` or the Swift sources (the build stamps `Info.plist`, and
+the server reads it back at runtime).
+
 ## Coding standards
 
 - **Documentation is required.** Every source file gets a header describing its
