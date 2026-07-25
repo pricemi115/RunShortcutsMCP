@@ -1,0 +1,13 @@
+{
+  "shortcuts": {
+    "TagNote": {
+      "description": "Append a live tag to an Apple Note so it surfaces in tag-driven Smart Folders.",
+      "input": "json",
+      "schema": {
+        "tag": "string (tag name, no leading #)",
+        "note": "string (exact note title)"
+      },
+      "side_effect": true
+    }
+  }
+}
