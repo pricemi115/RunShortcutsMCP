@@ -22,12 +22,24 @@ swift build -c "$CONFIG"
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 BIN="$BIN_DIR/$APP_NAME"
 
+# Render the manual to a standalone HTML page end users can just double-click.
+# The Markdown in assets/MANUAL.md stays the maintainable source of truth.
+mkdir -p build
+"$BIN_DIR/md2html" assets/MANUAL.md build/MANUAL.html
+
 APP="build/$APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
+
+# Bundle the (HTML) manual + example config so the app can self-provision them
+# into the per-user config folder on first run. Copied before signing so they're
+# inside the signed bundle.
+cp build/MANUAL.html "$APP/Contents/Resources/MANUAL.html"
+cp assets/RunShortcutsMCP.config.example "$APP/Contents/Resources/RunShortcutsMCP.config.example"
+cp assets/TagNote.shortcut "$APP/Contents/Resources/TagNote.shortcut"
 
 if [[ -n "$SIGN_ID" ]]; then
     codesign --force --options runtime \
@@ -40,11 +52,12 @@ else
     echo "         Set CODESIGN_IDENTITY to your Developer ID and re-run to sign."
 fi
 
-# Ship the user manual and a sample allowlist next to the app (outside the signed
-# bundle so they stay editable and don't affect the signature).
-cp MANUAL.md build/
-cp allowlist.example.json "build/$APP_NAME.config.example"
+# Ship the HTML manual and a sample allowlist next to the app (outside the signed
+# bundle so they stay editable and don't affect the signature). MANUAL.html was
+# already rendered into build/ above.
+cp assets/RunShortcutsMCP.config.example "build/RunShortcutsMCP.config.example"
+cp assets/TagNote.shortcut build/
 
 echo "Built: $APP"
 echo "Executable for MCP config: $ROOT/$APP/Contents/MacOS/$APP_NAME"
-echo "Distributables in build/: $APP_NAME.app, MANUAL.md, $APP_NAME.config.example"
+echo "Distributables in build/: $APP_NAME.app, MANUAL.html, RunShortcutsMCP.config.example, TagNote.shortcut"

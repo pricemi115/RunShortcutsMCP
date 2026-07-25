@@ -19,6 +19,26 @@
             "target": "RunShortcutsMCP",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release RunShortcutsMCP"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:RunShortcutsMCP}",
+            "name": "Debug md2html",
+            "target": "md2html",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug md2html"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:RunShortcutsMCP}",
+            "name": "Release md2html",
+            "target": "md2html",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release md2html"
         }
     ]
 }

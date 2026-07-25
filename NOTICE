@@ -9,3 +9,8 @@ full license text.
 This software depends on the Model Context Protocol Swift SDK
 (https://github.com/modelcontextprotocol/swift-sdk), which is licensed under
 the Apache License, Version 2.0 (with earlier portions under the MIT License).
+
+At build time only, the documentation tool uses Apple's Swift Markdown
+(https://github.com/swiftlang/swift-markdown), licensed under the Apache License,
+Version 2.0. It is used to render the manual to HTML and is not linked into the
+distributed RunShortcutsMCP executable.

@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **First-run provisioning:** on first launch the app creates its per-user config
+  folder (`~/Library/Application Support/<bundle-id>/`), seeds an empty
+  (default-deny) `RunShortcutsMCP.config`, and copies the manual and an example
+  config alongside it. No manual setup required.
+- **`scripts/build-dmg.sh`:** builds a signed, notarized, drag-to-Applications
+  `.dmg` installer (Developer ID Application signature; same notarization
+  credentials as `notarize.sh`).
+- The manual, example config, and a signed **`TagNote.shortcut`** are bundled into
+  the app's `Resources` and deployed on first run + in the `.dmg`, so the example
+  config's `TagNote` entry has a matching, installable shortcut.
+- Consolidated all deployable inputs under `assets/` (`MANUAL.md`,
+  `RunShortcutsMCP.config.example`, `TagNote.shortcut`).
+- **HTML manual:** the build now renders `assets/MANUAL.md` to a standalone,
+  styled `MANUAL.html` (via a new build-time `md2html` tool using Apple's
+  swift-markdown) and deploys the HTML instead of raw Markdown, so end users can
+  open it in any browser. The Markdown stays the maintainable source in the repo.
+  swift-markdown is scoped to the build tool's targets and is never linked into
+  the distributed executable.
 
 ## [0.1.0] - 2026-07-25
 

@@ -30,6 +30,12 @@ swift test
 To produce a signed, notarized `.app` for distribution, see the README's
 "Distribution" section (`scripts/build-app.sh` and `scripts/notarize.sh`).
 
+**The user manual** is authored in `assets/MANUAL.md`. Edit that file — the build
+renders it to `MANUAL.html` (via the `md2html` tool) for end users. Don't hand-edit
+generated HTML. Keep the manual to the Markdown constructs the renderer supports
+(headings, lists, tables, code, block quotes, links, emphasis); the renderer lives
+in `Sources/MarkdownHTML` if you need to extend it.
+
 ## Coding standards
 
 - **Documentation is required.** Every source file gets a header describing its

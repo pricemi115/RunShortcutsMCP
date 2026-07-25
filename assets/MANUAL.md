@@ -63,17 +63,29 @@ The assistant can run a shortcut **only if it appears in your list**. Anything n
 
   This is a per-user location — your own list, editable without admin rights, and it works no matter where the app itself lives (including a shared `/Applications`). The app discovers it automatically; there's nothing to configure.
 
-  Set it up once (copy the starter that ships next to the app):
+  **You don't have to create any of this by hand.** The first time the app runs (when Claude first calls it), it creates this folder, seeds an empty `RunShortcutsMCP.config`, and drops a browser-viewable copy of this manual (`MANUAL.html`), a reference `RunShortcutsMCP.config.example`, and the ready-to-install **`TagNote.shortcut`** right beside it. Just open the config and add your shortcuts (see **Format**, below). To open the folder in Finder:
 
   ```bash
-  mkdir -p ~/Library/Application\ Support/dev.grumptech.runshortcutsmcp
-  cp /Applications/RunShortcutsMCP.config.example \
-     ~/Library/Application\ Support/dev.grumptech.runshortcutsmcp/RunShortcutsMCP.config
-  # then open it in a text editor and add your shortcuts
+  open ~/Library/Application\ Support/dev.grumptech.runshortcutsmcp
   ```
 
 - *(Single-user convenience: a `RunShortcutsMCP.config` placed right next to `RunShortcutsMCP.app` also works, and is used only if the Application Support file above isn't present. Never put it **inside** `RunShortcutsMCP.app` — that breaks the app's signature.)*
 - *(Advanced: point `--allowlist` at any path in the Claude config args, as in §2.)*
+
+### The bundled example shortcut (TagNote)
+
+The default install **includes a ready-to-use shortcut called `TagNote`** — it's the one the example config refers to, and it appends a tag to an Apple Note.
+
+**Where to find it.** A signed `TagNote.shortcut` file ships in two places:
+
+- in the **`Resources`** folder inside the disk image you installed from (the window that opened when you double-clicked the download), and
+- in your config folder, where the app drops a copy on first run:
+  `~/Library/Application Support/dev.grumptech.runshortcutsmcp/TagNote.shortcut`
+  (open that folder with the `open …` command above).
+
+**How to install it.** Double-click `TagNote.shortcut` in Finder (or drag it onto the Shortcuts app). The Shortcuts app opens and adds it to your library — that's the whole process. Once it's installed *and* listed in your `RunShortcutsMCP.config`, the assistant can run it.
+
+To confirm, ask the assistant to *"list my shortcuts"* — `TagNote` should appear with `installed: true`.
 
 ### Format
 

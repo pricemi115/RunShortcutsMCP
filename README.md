@@ -11,7 +11,7 @@ Two tools over stdio:
 
 Safety is the point: **default-deny allowlist.** Only shortcuts in the config are runnable, and any flagged `side_effect` refuse to run unless the caller passes `confirm: true` (the client is expected to get the user's OK first).
 
-No third-party build tooling — plain Swift Package Manager (`swift build`). The only dependency is the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk).
+No third-party build tooling — plain Swift Package Manager (`swift build`). The shipped binary's only dependency is the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). A separate build-time tool (`md2html`) uses Apple's [swift-markdown](https://github.com/swiftlang/swift-markdown) to render the manual to HTML; it lives in its own targets and is never linked into the distributed executable.
 
 ## Requirements
 
@@ -21,13 +21,18 @@ No third-party build tooling — plain Swift Package Manager (`swift build`). Th
 ## Layout
 
 ```
-Sources/RunShortcutsCore/   # pure logic: allowlist model, process runner, path resolver
+Sources/RunShortcutsCore/   # pure logic: allowlist model, process runner, path resolver, provisioner
 Sources/RunShortcutsMCP/    # main.swift: wires the core to the MCP server
-Tests/RunShortcutsCoreTests # unit tests for the allowlist/authorization logic
+Sources/MarkdownHTML/       # build-time only: Markdown → HTML renderer (uses swift-markdown)
+Sources/md2html/            # build-time only: CLI that renders assets/MANUAL.md → MANUAL.html
+Tests/RunShortcutsCoreTests # unit tests for the allowlist/authorization/provisioning logic
+Tests/MarkdownHTMLTests     # unit tests for the Markdown → HTML renderer
 packaging/                  # Info.plist + entitlements for the .app bundle
-scripts/build-app.sh        # builds + bundles + (optionally) signs
-allowlist.example.json      # sample config, includes TagNote
+scripts/                    # build-app.sh, build-dmg.sh, notarize.sh
+assets/                     # deployable inputs: MANUAL.md (source), RunShortcutsMCP.config.example, TagNote.shortcut
 ```
+
+The manual is authored in `assets/MANUAL.md` (the maintainable source) and rendered to `MANUAL.html` at build time so end users can open it in any browser without a Markdown viewer.
 
 ## Build & test
 
@@ -59,7 +64,7 @@ The server resolves its allowlist path in this order:
 4. **Next to the app** — `<AppName>.config` beside the `.app` bundle (single-user convenience fallback).
 5. `allowlist.json` in the working directory (last resort).
 
-`build-app.sh` ships a `RunShortcutsMCP.config.example` beside the app; end users copy it to the per-user location above and edit. See `MANUAL.md` for the end-user walkthrough.
+The deployable inputs live in `assets/` (`MANUAL.md`, `RunShortcutsMCP.config.example`, `TagNote.shortcut`); the build scripts render the manual to `MANUAL.html` and bundle everything into the app and the installer. See `assets/MANUAL.md` for the end-user walkthrough.
 
 ## Register with the MCP client
 
@@ -166,6 +171,20 @@ Prefer Xcode's build system? Open `Package.swift` directly in Xcode (File ▸ Op
 - **GUI flash**: `shortcuts run` can briefly surface the Shortcuts app. Keep allowlisted shortcuts headless-safe (no interactive prompts) so runs don't hang.
 - **Blocking I/O**: the process runner reads output synchronously. Fine for small results; revisit if a shortcut streams large output.
 - **Notarization**: only needed to distribute to other Macs. For local use, a Developer ID signature is enough.
+
+## Installer (.dmg)
+
+For end users, ship a signed, notarized **disk image**. Build the app first, then the DMG:
+
+```bash
+export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+./scripts/build-app.sh release     # → build/RunShortcutsMCP.app
+./scripts/build-dmg.sh             # → build/RunShortcutsMCP.dmg (signed + notarized)
+```
+
+The DMG is signed with the same **Developer ID Application** cert as the app (no separate installer certificate) and notarized/stapled using the same credentials as `notarize.sh`. The disk image shows the app and a drag-to-`/Applications` shortcut at the top level, with the manual (`MANUAL.html`), a reference config, and the example **`TagNote.shortcut`** tucked into a `Resources/` folder.
+
+**First-run provisioning.** Users don't set up the config by hand. The first time the app runs (when the MCP client first launches it), it creates `~/Library/Application Support/<bundle-id>/`, seeds an empty (default-deny) `RunShortcutsMCP.config`, and drops `MANUAL.html`, `RunShortcutsMCP.config.example`, and `TagNote.shortcut` beside it for reference. The user just edits the config.
 
 ## License
 

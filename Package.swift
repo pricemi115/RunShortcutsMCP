@@ -12,7 +12,10 @@ let package = Package(
         .library(name: "RunShortcutsCore", targets: ["RunShortcutsCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0")
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
+        // Build-time only: used by the `md2html` tool to render the manual.
+        // Never linked into the shipped RunShortcutsMCP executable.
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.6.0")
     ],
     targets: [
         .target(
@@ -25,9 +28,25 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk")
             ]
         ),
+        // Build-time doc tooling. Kept in a separate library/executable so the
+        // swift-markdown dependency stays out of the distributed binary.
+        .target(
+            name: "MarkdownHTML",
+            dependencies: [
+                .product(name: "Markdown", package: "swift-markdown")
+            ]
+        ),
+        .executableTarget(
+            name: "md2html",
+            dependencies: ["MarkdownHTML"]
+        ),
         .testTarget(
             name: "RunShortcutsCoreTests",
             dependencies: ["RunShortcutsCore"]
+        ),
+        .testTarget(
+            name: "MarkdownHTMLTests",
+            dependencies: ["MarkdownHTML"]
         )
     ]
 )

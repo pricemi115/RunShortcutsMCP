@@ -23,7 +23,25 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
-// MARK: - Startup: resolve + load the allowlist (fail fast if unusable)
+// MARK: - Startup: first-run provisioning, then resolve + load the allowlist
+
+// On first run, create the per-user config folder, seed an empty (default-deny)
+// allowlist, and drop the manual + example alongside it. Best-effort: any failure
+// here must not stop the server from starting.
+let bundleIdentifier = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
+if let configDirectory = ConfigProvisioner.applicationSupportDirectory(bundleID: bundleIdentifier) {
+    let bundledAssets = [
+        Bundle.main.url(forResource: "MANUAL", withExtension: "html"),
+        Bundle.main.url(forResource: "RunShortcutsMCP.config", withExtension: "example"),
+        Bundle.main.url(forResource: "TagNote", withExtension: "shortcut")
+    ].compactMap { $0 }
+    _ = try? ConfigProvisioner.provision(
+        into: configDirectory,
+        configFileName: AllowlistLocator.configFileName,
+        defaultConfigContents: ConfigProvisioner.emptyConfigContents,
+        assets: bundledAssets
+    )
+}
 
 let allowlistPath = AllowlistLocator.resolve(
     arguments: Array(CommandLine.arguments.dropFirst()),
