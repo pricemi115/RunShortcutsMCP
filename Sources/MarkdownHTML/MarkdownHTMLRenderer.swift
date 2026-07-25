@@ -150,11 +150,17 @@ public struct MarkdownHTMLRenderer: MarkupVisitor {
         "<ol>\n\(renderChildren(of: orderedList))</ol>\n"
     }
 
-    /// Renders a list item as `<li>`.
+    /// Renders a list item as `<li>`. A lone paragraph is rendered "tight" (its
+    /// inline content, without a `<p>` wrapper); items with multiple or non-paragraph
+    /// blocks (e.g. nested lists) keep their block structure.
     /// - Parameter listItem: (`ListItem`) The list-item node.
     /// - Returns: (`String`) `<li>…</li>` with its contents.
     public mutating func visitListItem(_ listItem: ListItem) -> String {
-        "<li>\(renderChildren(of: listItem))</li>\n"
+        let blocks = Array(listItem.children)
+        if blocks.count == 1, let paragraph = blocks.first as? Paragraph {
+            return "<li>\(renderChildren(of: paragraph))</li>\n"
+        }
+        return "<li>\(renderChildren(of: listItem))</li>\n"
     }
 
     /// Renders a block quote as `<blockquote>`.
@@ -193,6 +199,23 @@ public struct MarkdownHTMLRenderer: MarkupVisitor {
         }
         html += "</tbody>\n</table>\n"
         return html
+    }
+
+    /// Renders inline raw HTML from the source as escaped text, so angle-bracket
+    /// tokens (e.g. `<Shortcut Input>`, `<bundle-id>`) render literally rather than
+    /// passing through as live markup.
+    /// - Parameter inlineHTML: (`InlineHTML`) The inline raw-HTML node.
+    /// - Returns: (`String`) The escaped raw HTML.
+    public mutating func visitInlineHTML(_ inlineHTML: InlineHTML) -> String {
+        escape(inlineHTML.rawHTML)
+    }
+
+    /// Renders a raw HTML block from the source as an escaped paragraph, for the
+    /// same safety reason as inline raw HTML.
+    /// - Parameter html: (`HTMLBlock`) The raw HTML block node.
+    /// - Returns: (`String`) An escaped `<p>` containing the raw block.
+    public mutating func visitHTMLBlock(_ html: HTMLBlock) -> String {
+        "<p>\(escape(html.rawHTML))</p>\n"
     }
 
     // MARK: - Helpers
