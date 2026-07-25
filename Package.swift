@@ -12,10 +12,10 @@ let package = Package(
         .library(name: "RunShortcutsCore", targets: ["RunShortcutsCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", .upToNextMinor(from: "0.12.1")),
         // Build-time only: used by the `md2html` tool to render the manual.
         // Never linked into the shipped RunShortcutsMCP executable.
-        .package(url: "https://github.com/swiftlang/swift-markdown.git", from: "0.6.0")
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", .upToNextMinor(from: "0.8.0"))
     ],
     targets: [
         .target(

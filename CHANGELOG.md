@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `allowlist.json` fallback. If no allowlist is configured (via `--allowlist`, the
   `RUNSHORTCUTS_ALLOWLIST` env var, or the per-user config), the server refuses to
   start rather than trusting the current directory.
+- **Dependency pins:** `swift-sdk` and `swift-markdown` now use
+  `.upToNextMinor(from:)`, so `swift package update` can't silently pull a breaking
+  0.x minor (the committed `Package.resolved` already pins exact revisions).
 
 ### Security
 
@@ -51,6 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   captured output — so a hung or chatty shortcut can't deadlock the pipes, wedge the
   server, or exhaust memory. `SIGPIPE` is ignored so writes to a closed pipe error
   instead of crashing.
+- **Provisioning hardening (CWE-59/276/209):** the per-user config directory is
+  created `0700` and the seeded config is written `0600` with `O_NOFOLLOW`/`O_EXCL`
+  (won't follow a pre-planted symlink). `run_shortcut` failures now return a generic
+  message to the client, with the detailed error kept in the server log.
 
 ## [0.1.0] - 2026-07-25
 

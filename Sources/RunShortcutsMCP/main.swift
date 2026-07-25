@@ -162,7 +162,10 @@ await server.withMethodHandler(CallTool.self) { params in
                 : ShortcutResult(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr + "\n[config] " + configWarnings.joined(separator: "; "))
             return .init(content: [.text(text: RunOutput(reported).jsonString(), annotations: nil, _meta: nil)], isError: result.exitCode != 0)
         } catch {
-            return .init(content: [.text(text: "Failed to run '\(name)': \(error)", annotations: nil, _meta: nil)], isError: true)
+            // Keep the detailed error in the local server log; return a generic
+            // message to the client so filesystem paths/internals aren't leaked (CWE-209).
+            FileHandle.standardError.write(Data("RunShortcutsMCP: run_shortcut '\(name)' failed: \(error)\n".utf8))
+            return .init(content: [.text(text: "Failed to run '\(name)'. See the server log for details.", annotations: nil, _meta: nil)], isError: true)
         }
 
     default:

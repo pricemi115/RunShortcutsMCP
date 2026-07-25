@@ -79,4 +79,39 @@ final class ConfigProvisionerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("MANUAL.md").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("RunShortcutsMCP.config.example").path))
     }
+
+    /// Verifies the created config directory is 0700 and the seeded config file is 0600.
+    /// - Throws: Rethrows provisioning/file errors.
+    func testDirAndSeededConfigHaveRestrictivePermissions() throws {
+        let dir = tempRoot.appendingPathComponent("Support", isDirectory: true)
+        let configURL = try ConfigProvisioner.provision(
+            into: dir,
+            configFileName: "RunShortcutsMCP.config",
+            defaultConfigContents: ConfigProvisioner.emptyConfigContents
+        )
+        let dirPerms = (try FileManager.default.attributesOfItem(atPath: dir.path)[.posixPermissions] as? NSNumber)?.intValue
+        let filePerms = (try FileManager.default.attributesOfItem(atPath: configURL.path)[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(dirPerms, 0o700)
+        XCTAssertEqual(filePerms, 0o600)
+    }
+
+    /// Verifies provisioning refuses to follow a symlink planted at the config path
+    /// (O_NOFOLLOW): it throws and does not create the symlink's target.
+    /// - Throws: Rethrows setup file errors.
+    func testRefusesToFollowSymlinkAtConfigPath() throws {
+        let dir = tempRoot.appendingPathComponent("Support", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // A dangling symlink where the config would be written (fileExists → false,
+        // so provisioning attempts the secure write and must refuse to follow it).
+        let target = tempRoot.appendingPathComponent("evil-target.txt")
+        let configURL = dir.appendingPathComponent("RunShortcutsMCP.config")
+        try FileManager.default.createSymbolicLink(at: configURL, withDestinationURL: target)
+
+        XCTAssertThrowsError(try ConfigProvisioner.provision(
+            into: dir,
+            configFileName: "RunShortcutsMCP.config",
+            defaultConfigContents: ConfigProvisioner.emptyConfigContents
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path), "the symlink target must not be created")
+    }
 }

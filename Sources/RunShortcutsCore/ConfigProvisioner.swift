@@ -12,6 +12,13 @@
 
 import Foundation
 
+/// Errors raised by `ConfigProvisioner`.
+public enum ConfigProvisionerError: Error, Equatable {
+    /// The seeded config file could not be created. `code` is the POSIX `errno`
+    /// (e.g. `ELOOP` when a symlink was planted at the target path).
+    case writeFailed(path: String, code: Int32)
+}
+
 /// Pure-logic helper that provisions the per-user config directory on first run.
 /// Namespaced as an `enum` with only static members (no instances).
 public enum ConfigProvisioner {
@@ -51,11 +58,17 @@ public enum ConfigProvisioner {
         assets: [URL] = [],
         fileManager: FileManager = .default
     ) throws -> URL {
-        try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(
+            at: destinationDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
 
         let configURL = destinationDirectory.appendingPathComponent(configFileName)
         if !fileManager.fileExists(atPath: configURL.path) {
-            try Data(defaultConfigContents.utf8).write(to: configURL)
+            // Owner-only, symlink-safe write so a pre-planted symlink at this path
+            // can't redirect the seeded config elsewhere (CWE-59 / CWE-276).
+            try writeNewFileSecurely(Data(defaultConfigContents.utf8), to: configURL)
         }
 
         // Refresh the bundled reference files each run so app updates ship current
@@ -67,5 +80,58 @@ public enum ConfigProvisioner {
         }
 
         return configURL
+    }
+
+    /// Writes `data` to a brand-new file at `url` with owner-only permissions (`0600`),
+    /// refusing to follow a symlink at that path (`O_NOFOLLOW`) and failing if the file
+    /// already exists (`O_EXCL`). A benign "already exists" is treated as a no-op so a
+    /// race with another instance doesn't surface as an error.
+    /// - Parameters:
+    ///   - data: (`Data`) Bytes to write.
+    ///   - url: (`URL`) Destination file path.
+    /// - Throws: `ConfigProvisionerError.writeFailed` if the file cannot be created for
+    ///   any reason other than already existing.
+    private static func writeNewFileSecurely(_ data: Data, to url: URL) throws {
+        let descriptor = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
+        }
+        if descriptor == -1 {
+            let code = errno
+            // `O_EXCL` reports a symlink planted at the path as `EEXIST` (not `ELOOP`).
+            // Surface that as an error rather than silently skipping, so a tampering
+            // attempt isn't ignored. A benign `EEXIST` from a regular file racing in
+            // (after the outer existence check) is treated as a no-op.
+            if isSymlink(at: url) {
+                throw ConfigProvisionerError.writeFailed(path: url.path, code: code)
+            }
+            if code == EEXIST { return }
+            throw ConfigProvisionerError.writeFailed(path: url.path, code: code)
+        }
+        defer { close(descriptor) }
+        try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard var pointer = raw.baseAddress else { return }
+            var remaining = raw.count
+            while remaining > 0 {
+                let written = write(descriptor, pointer, remaining)
+                if written <= 0 {
+                    throw ConfigProvisionerError.writeFailed(path: url.path, code: errno)
+                }
+                pointer = pointer.advanced(by: written)
+                remaining -= written
+            }
+        }
+    }
+
+    /// Reports whether `url` is itself a symbolic link, without following it (`lstat`).
+    /// - Parameter url: (`URL`) The path to test.
+    /// - Returns: (`Bool`) `true` if the path exists and is a symbolic link.
+    private static func isSymlink(at url: URL) -> Bool {
+        var info = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return lstat(path, &info)
+        }
+        return result == 0 && (info.st_mode & S_IFMT) == S_IFLNK
     }
 }
