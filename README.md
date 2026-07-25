@@ -34,6 +34,16 @@ assets/                     # deployable inputs: MANUAL.md (source), RunShortcut
 
 The manual is authored in `assets/MANUAL.md` (the maintainable source) and rendered to `MANUAL.html` at build time so end users can open it in any browser without a Markdown viewer.
 
+## Versioning
+
+The version lives in a single file, **`VERSION`**, at the repo root. The build
+(`scripts/build-app.sh`) stamps it into the app bundle's `Info.plist`
+(`CFBundleShortVersionString`), and the server reads it back from the bundle at
+runtime — so `VERSION` is the one place to edit. To cut a release, bump `VERSION`
+and add a `CHANGELOG.md` entry. (The `CHANGELOG.md` headings are the historical
+ledger, and `SECURITY.md`'s supported-version line is policy — both maintained per
+release.)
+
 ## Build & test
 
 ```bash

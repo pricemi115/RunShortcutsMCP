@@ -62,9 +62,14 @@ let runner = ShortcutsRunner()
 
 // MARK: - Server + tool declarations
 
+// The marketing version is stamped into the bundle's Info.plist from the root
+// VERSION file at build time; read it back here so VERSION is the single source of
+// truth. Falls back to a dev marker when run outside a bundle (e.g. `swift run`).
+let serverVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0+dev"
+
 let server = Server(
     name: "RunShortcuts",
-    version: "0.1.0",
+    version: serverVersion,
     capabilities: .init(tools: .init(listChanged: false))
 )
 
