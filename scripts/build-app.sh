@@ -27,7 +27,6 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 cp packaging/Info.plist "$APP/Contents/Info.plist"
-cp allowlist.example.json "$APP/Contents/Resources/allowlist.json"
 
 if [[ -n "$SIGN_ID" ]]; then
     codesign --force --options runtime \
@@ -40,5 +39,11 @@ else
     echo "         Set CODESIGN_IDENTITY to your Developer ID and re-run to sign."
 fi
 
+# Ship the user manual and a sample allowlist next to the app (outside the signed
+# bundle so they stay editable and don't affect the signature).
+cp MANUAL.md build/
+cp allowlist.example.json "build/$APP_NAME.config.example"
+
 echo "Built: $APP"
 echo "Executable for MCP config: $ROOT/$APP/Contents/MacOS/$APP_NAME"
+echo "Distributables in build/: $APP_NAME.app, MANUAL.md, $APP_NAME.config.example"

@@ -49,22 +49,33 @@ This produces `build/RunShortcutsMCP.app`. The bundled executable is at:
 build/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP
 ```
 
-The build copies `allowlist.example.json` into the bundle as `Contents/Resources/allowlist.json`. Point the server at a different allowlist with `--allowlist <path>` or the `RUNSHORTCUTS_ALLOWLIST` env var.
+## Allowlist resolution
+
+The server resolves its allowlist path in this order:
+
+1. `--allowlist <path>` argument,
+2. `RUNSHORTCUTS_ALLOWLIST` environment variable,
+3. **Per-user config** — `~/Library/Application Support/<bundle-id>/<AppName>.config` (e.g. `…/dev.grumptech.runshortcutsmcp/RunShortcutsMCP.config`). The bundle id is read at runtime from `Bundle.main`, so it always matches the signed identity. This is the recommended default.
+4. **Next to the app** — `<AppName>.config` beside the `.app` bundle (single-user convenience fallback).
+5. `allowlist.json` in the working directory (last resort).
+
+`build-app.sh` ships a `RunShortcutsMCP.config.example` beside the app; end users copy it to the per-user location above and edit. See `MANUAL.md` for the end-user walkthrough.
 
 ## Register with the MCP client
 
-Point the client at the **bundled** executable (not a bare `.build` binary) so TCC uses the signed identity:
+Point the client at the **bundled** executable (not a bare `.build` binary) so TCC uses the signed identity. With the config file sitting next to the app, no `args` are needed:
 
 ```json
 {
   "mcpServers": {
     "run-shortcuts": {
-      "command": "/Users/you/Documents/SourceCode/RunShortcutsMCP/build/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP",
-      "args": ["--allowlist", "/Users/you/.config/runshortcuts/allowlist.json"]
+      "command": "/Applications/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP"
     }
   }
 }
 ```
+
+To use an allowlist elsewhere, add `"args": ["--allowlist", "/full/path/to/RunShortcutsMCP.config"]`.
 
 ### Milestone-1 check
 

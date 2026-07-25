@@ -89,4 +89,31 @@ final class AllowlistTests: XCTestCase {
             "allowlist.json"
         )
     }
+
+    /// Verifies the auto-discovered config is used when present but is outranked by
+    /// an explicit `--allowlist` argument and by the environment variable.
+    func testLocatorUsesDiscoveredConfigWhenPresent() {
+        let discovered: () -> String? = { "/Users/me/Library/Application Support/dev.grumptech.runshortcutsmcp/RunShortcutsMCP.config" }
+
+        // Used when no argument/env is given.
+        XCTAssertEqual(
+            AllowlistLocator.resolve(arguments: [], environment: [:], discoveredConfig: discovered),
+            "/Users/me/Library/Application Support/dev.grumptech.runshortcutsmcp/RunShortcutsMCP.config"
+        )
+        // Argument still wins.
+        XCTAssertEqual(
+            AllowlistLocator.resolve(arguments: ["--allowlist", "/tmp/a.json"], environment: [:], discoveredConfig: discovered),
+            "/tmp/a.json"
+        )
+        // Env still wins over discovered.
+        XCTAssertEqual(
+            AllowlistLocator.resolve(arguments: [], environment: ["RUNSHORTCUTS_ALLOWLIST": "/tmp/b.json"], discoveredConfig: discovered),
+            "/tmp/b.json"
+        )
+        // Falls through to default when nothing is discovered.
+        XCTAssertEqual(
+            AllowlistLocator.resolve(arguments: [], environment: [:], discoveredConfig: { nil }),
+            "allowlist.json"
+        )
+    }
 }

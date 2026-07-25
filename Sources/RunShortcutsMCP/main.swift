@@ -26,7 +26,8 @@ func fail(_ message: String) -> Never {
 
 let allowlistPath = AllowlistLocator.resolve(
     arguments: Array(CommandLine.arguments.dropFirst()),
-    environment: ProcessInfo.processInfo.environment
+    environment: ProcessInfo.processInfo.environment,
+    discoveredConfig: { AllowlistLocator.discoveredConfig() }
 )
 
 let allowlist: Allowlist
