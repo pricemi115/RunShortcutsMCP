@@ -180,7 +180,7 @@ Prefer Xcode's build system? Open `Package.swift` directly in Xcode (File ▸ Op
 
 - **SDK API**: written against the MCP Swift SDK 0.11.x server API (`Server`, `StdioTransport`, `withMethodHandler(ListTools/CallTool)`, `Tool(inputSchema:)`). Pre-1.0 minor versions can introduce breaking changes; if `server.start` shifts, adjust `main.swift`. The process is kept alive with a sleep loop (no reliance on version-specific helpers); the client terminates the subprocess on disconnect.
 - **GUI flash**: `shortcuts run` can briefly surface the Shortcuts app. Keep allowlisted shortcuts headless-safe (no interactive prompts) so runs don't hang.
-- **Blocking I/O**: the process runner reads output synchronously. Fine for small results; revisit if a shortcut streams large output.
+- **Subprocess safety**: the runner drains stdout/stderr concurrently, enforces a wall-clock timeout (default 120s; SIGTERM then SIGKILL) and caps captured output per stream (default 10 MB), so a hung or noisy shortcut can't wedge the server or exhaust memory. Both are overridable per shortcut in the config (`timeout_seconds` 5–300; `max_output_bytes` 1 KB–100 MB; out-of-range values are clamped). Calls are still synchronous per request.
 - **Notarization**: only needed to distribute to other Macs. For local use, a Developer ID signature is enough.
 
 ## Installer (.dmg)

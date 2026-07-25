@@ -25,6 +25,10 @@ func fail(_ message: String) -> Never {
 
 // MARK: - Startup: first-run provisioning, then resolve + load the allowlist
 
+// Writing to a closed pipe (a child that exited, or a disconnected client) should
+// surface as an error rather than killing the process with SIGPIPE.
+signal(SIGPIPE, SIG_IGN)
+
 // On first run, create the per-user config folder, seed an empty (default-deny)
 // allowlist, and drop the manual + example alongside it. Best-effort: any failure
 // here must not stop the server from starting.
@@ -56,6 +60,12 @@ do {
     allowlist = try Allowlist.load(from: allowlistPath)
 } catch {
     fail("RunShortcutsMCP: could not load allowlist at '\(allowlistPath)': \(error)")
+}
+
+// Surface any per-shortcut limit values that fall outside the allowed range (they
+// will be clamped). Written to stderr, which lands in the MCP client's server log.
+for warning in allowlist.limitWarnings() {
+    FileHandle.standardError.write(Data("RunShortcutsMCP: config warning — \(warning)\n".utf8))
 }
 
 let runner = ShortcutsRunner()
@@ -141,8 +151,16 @@ await server.withMethodHandler(CallTool.self) { params in
         }
         let input = params.arguments?["input"]?.stringValue
         do {
-            let result = try runner.run(name: name, input: input)
-            return .init(content: [.text(text: RunOutput(result).jsonString(), annotations: nil, _meta: nil)], isError: result.exitCode != 0)
+            let limitedRunner = ShortcutsRunner(
+                timeout: allowlist.timeout(for: name),
+                maxOutputBytes: allowlist.maxOutputBytes(for: name)
+            )
+            let result = try limitedRunner.run(name: name, input: input)
+            let configWarnings = entry.limitWarnings()
+            let reported = configWarnings.isEmpty
+                ? result
+                : ShortcutResult(exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr + "\n[config] " + configWarnings.joined(separator: "; "))
+            return .init(content: [.text(text: RunOutput(reported).jsonString(), annotations: nil, _meta: nil)], isError: result.exitCode != 0)
         } catch {
             return .init(content: [.text(text: "Failed to run '\(name)': \(error)", annotations: nil, _meta: nil)], isError: true)
         }
