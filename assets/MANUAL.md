@@ -74,7 +74,7 @@ The assistant can run a shortcut **only if it appears in your list**. Anything n
 
 ### The bundled example shortcut (TagNote)
 
-The default install **includes a ready-to-use shortcut called `TagNote`** — it's the one the example config refers to, and it adds or removes a live tag on an Apple Note (send `"action": "add"` (the default) or `"remove"`).
+The default install **includes a ready-to-use shortcut called `TagNote`** — it's the one the example config refers to, and it adds or removes a live tag on an Apple Note (send `"action": "add"` (the default) or `"remove"`). Apple's built-in **Find Notes** action only supports a "contains" match, not an exact one, so `TagNote` separately verifies the note it found matches the requested title exactly — if it doesn't, it returns a clear "not found" error instead of silently tagging the wrong note (or doing nothing).
 
 **Where to find it.** A signed `TagNote.shortcut` file ships in two places:
 
@@ -160,6 +160,12 @@ Create shortcuts in the **Shortcuts** app (Applications ▸ Shortcuts). A few ru
    ```
 
    If it behaves in Terminal, it'll behave for the assistant.
+
+6. **Debugging mid-run values.** Headless shortcuts have no UI (§5), so you can't just watch one run to see what a variable holds partway through. Two actions make this easy while you're still building and testing — remove both before the shortcut goes on your allowlist:
+   - **Speak Text** — drop it anywhere mid-shortcut to have your Mac read a variable's value out loud as it runs. It doesn't pause for a response, so it's safe during test runs.
+   - **Stop and Output** — temporarily move it earlier, right after the step you want to inspect, so `shortcuts run` prints that intermediate value to the Terminal instead of running to the end. Move it back to the final action once the value looks right.
+
+   A stray early **Stop and Output** left in place will make the assistant see a truncated result on every real run; a leftover **Speak Text** adds unwanted noise to what should be a silent, headless run. Strip both out (or move **Stop and Output** back to the end) before adding the shortcut to `RunShortcutsMCP.config`.
 
 ---
 
