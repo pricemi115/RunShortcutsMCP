@@ -74,7 +74,7 @@ The assistant can run a shortcut **only if it appears in your list**. Anything n
 
 ### The bundled example shortcut (TagNote)
 
-The default install **includes a ready-to-use shortcut called `TagNote`** — it's the one the example config refers to, and it appends a tag to an Apple Note.
+The default install **includes a ready-to-use shortcut called `TagNote`** — it's the one the example config refers to, and it adds or removes a live tag on an Apple Note (send `"action": "add"` (the default) or `"remove"`).
 
 **Where to find it.** A signed `TagNote.shortcut` file ships in two places:
 
@@ -95,11 +95,12 @@ It's a JSON file. Each entry is keyed by the **exact name** of a Shortcut, with 
 {
   "shortcuts": {
     "TagNote": {
-      "description": "Append a tag to an Apple Note.",
+      "description": "Add or remove a tag on an Apple Note.",
       "input": "json",
       "schema": {
         "tag": "the tag name (no # symbol)",
-        "note": "the exact title of the note"
+        "note": "the exact title of the note",
+        "action": "\"add\" (default) or \"remove\""
       },
       "side_effect": true
     },

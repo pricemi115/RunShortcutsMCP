@@ -1,11 +1,12 @@
 {
   "shortcuts": {
     "TagNote": {
-      "description": "Append a live tag to an Apple Note so it surfaces in tag-driven Smart Folders.",
+      "description": "Add or remove a live tag on an Apple Note (adds by default) so it surfaces in, or drops out of, tag-driven Smart Folders.",
       "input": "json",
       "schema": {
         "tag": "string (tag name, no leading #)",
-        "note": "string (exact note title)"
+        "note": "string (exact note title)",
+        "action": "string, optional: \"add\" (default) or \"remove\""
       },
       "side_effect": true
     }

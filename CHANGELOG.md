@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- New changes land here and roll into the next release. -->
+
+## [1.0.0] - 2026-07-25
+
 ### Added
 
 - **First-run provisioning:** on first launch the app creates its per-user config
@@ -28,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   swift-markdown is scoped to the build tool's targets and is never linked into
   the distributed executable.
 - **Per-shortcut execution limits:** optional `timeout_seconds` (5–300s, default 120) and `max_output_bytes` (1 KB–100 MB, default 10 MB) on each allowlist entry; omitting them keeps the secure defaults, and out-of-range values are clamped to the nearest bound and reported (in `list_shortcuts`, in the run result, and in the server log).
+- **TagNote add/remove:** the bundled `TagNote` shortcut now takes an optional
+  `action` field — `"add"` (default) or `"remove"` — to add or remove a live tag on
+  an Apple Note. Removing a tag the note doesn't have is a silent no-op, and the
+  shortcut returns a clear error when the required `tag`/`note` are missing or the
+  note can't be found.
 
 ### Changed
 
@@ -82,5 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that all shortcuts be headless.
 - Unit tests for the allowlist and path-resolution logic.
 
-[Unreleased]: https://RunShortcutsMCP.grumptech.dev/compare/v0.1.0...HEAD
+## Version links
+
+Reference-style link definitions: they turn the bracketed `[version]` headings
+above into links to each version's compare/release page on GitHub. They render
+invisibly — you see the linked headings, not these lines.
+
+[Unreleased]: https://RunShortcutsMCP.grumptech.dev/compare/v1.0.0...HEAD
+[1.0.0]: https://RunShortcutsMCP.grumptech.dev/releases/tag/v1.0.0
 [0.1.0]: https://RunShortcutsMCP.grumptech.dev/releases/tag/v0.1.0
