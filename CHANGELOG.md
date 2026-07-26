@@ -97,6 +97,6 @@ Reference-style link definitions: they turn the bracketed `[version]` headings
 above into links to each version's compare/release page on GitHub. They render
 invisibly — you see the linked headings, not these lines.
 
-[Unreleased]: https://RunShortcutsMCP.grumptech.dev/compare/v1.0.0...HEAD
-[1.0.0]: https://RunShortcutsMCP.grumptech.dev/releases/tag/v1.0.0
-[0.1.0]: https://RunShortcutsMCP.grumptech.dev/releases/tag/v0.1.0
+[Unreleased]: https://github.com/pricemi115/RunShortcutsMCP/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/pricemi115/RunShortcutsMCP/releases/tag/v1.0.0
+[0.1.0]: https://github.com/pricemi115/RunShortcutsMCP/releases/tag/v0.1.0
