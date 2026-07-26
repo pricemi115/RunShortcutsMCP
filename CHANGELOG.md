@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- New changes land here and roll into the next release. -->
 
+## [1.1.0] - 2026-07-26
+
+### Fixed
+
+- **`TagNote` could silently match the wrong note, or none at all:** Apple's
+  built-in **Find Notes** action only supports a "contains" match, not an exact
+  one, so a non-unique note title could match unexpectedly, and a missing note
+  would fail with no clear signal. `TagNote` now verifies the note it found
+  matches the requested title exactly and returns a clear "not found" error
+  instead of failing silently.
+
+### Changed
+
+- **Manual:** documented how to debug a headless shortcut mid-build using
+  **Speak Text** and a temporarily relocated **Stop and Output** action (§4),
+  and noted `TagNote`'s new exact-match verification (§3).
+
 ## [1.0.0] - 2026-07-25
 
 ### Added
@@ -97,6 +114,6 @@ Reference-style link definitions: they turn the bracketed `[version]` headings
 above into links to each version's compare/release page on GitHub. They render
 invisibly — you see the linked headings, not these lines.
 
-[Unreleased]: https://github.com/pricemi115/RunShortcutsMCP/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/pricemi115/RunShortcutsMCP/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/pricemi115/RunShortcutsMCP/releases/tag/v1.1.0
 [1.0.0]: https://github.com/pricemi115/RunShortcutsMCP/releases/tag/v1.0.0
-[0.1.0]: https://github.com/pricemi115/RunShortcutsMCP/releases/tag/v0.1.0
