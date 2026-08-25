@@ -152,9 +152,49 @@ enum GateError: Error {
 // truth. Falls back to a dev marker when run outside a bundle (e.g. `swift run`).
 let serverVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0+dev"
 
+/// Server-level guidance returned in the initialize result, describing how the
+/// tools work *together* — discovery order, which run tool to reach for, and the
+/// consent rule. Per-tool details stay in each tool's own description; this
+/// covers only what spans them.
+///
+/// Client support is uneven and this is deliberately additive: the MCP spec
+/// defines the field but leaves its handling implementation-defined, so some
+/// clients inject it into the model's context and others parse and ignore it
+/// (Claude Desktop stores it without reading it, as of this writing). Nothing
+/// here may be the *only* place a rule appears — anything load-bearing is also
+/// stated in the relevant tool description, which every client does surface.
+let serverInstructions = """
+    RunShortcuts runs Apple Shortcuts on the user's Mac. Only shortcuts the user has \
+    explicitly allowlisted can run; anything else is refused.
+
+    Start with list_shortcuts. Shortcut names are personal to this user and cannot be \
+    guessed — the listing gives each shortcut's exact name, the input it expects, whether \
+    it changes anything (side_effect), and whether it is currently installed. A shortcut \
+    listed with installed: false is allowlisted but missing from the Shortcuts app, and \
+    will fail until the user installs it.
+
+    Prefer run_shortcut_async for everything. It returns a job_id immediately and has no \
+    duration limit; get_shortcut_result then waits up to wait_seconds (default 45) and \
+    reports the outcome. A reply of queued or running is normal progress, not an error — \
+    call get_shortcut_result again. run_shortcut instead waits inline and is bound by this \
+    client's own request timeout, so it is only safe for shortcuts that reliably finish in \
+    under a minute.
+
+    Consent: a shortcut flagged side_effect changes something on the user's machine. Ask \
+    the user and get their approval before running it, then pass confirm=true. This server \
+    is headless and cannot verify that you asked — it trusts you. Never set confirm=true on \
+    your own initiative, and never treat a refusal message as license to immediately retry \
+    with confirm=true; the refusal is telling you to go ask the user.
+
+    A finished job's result stays readable for about ten minutes. If get_shortcut_result \
+    reports an unknown job id, that result has expired — run the shortcut again rather than \
+    retrying the id.
+    """
+
 let server = Server(
     name: "RunShortcuts",
     version: serverVersion,
+    instructions: serverInstructions,
     capabilities: .init(tools: .init(listChanged: false))
 )
 
@@ -172,7 +212,7 @@ let listTool = Tool(
 /// Action tool: runs one allowlisted shortcut and waits (briefly) for its output.
 let runTool = Tool(
     name: "run_shortcut",
-    description: "Run an allowlisted Apple Shortcut and wait for its output. Only suitable for shortcuts that reliably finish in under a minute — the MCP client aborts longer calls. Prefer run_shortcut_async, which has no duration limit and is the recommended path for all shortcuts. Shortcuts flagged side_effect require confirm=true.",
+    description: "Run an allowlisted Apple Shortcut and wait for its output. Only suitable for shortcuts that reliably finish in under a minute — the MCP client aborts longer calls; prefer run_shortcut_async, which has no duration limit and is the recommended path for any shortcut. A shortcut flagged side_effect changes something on the user's Mac: ask the user and get their approval first, then pass confirm=true. Never set confirm=true on your own initiative.",
     inputSchema: .object([
         "type": .string("object"),
         "properties": .object([
@@ -197,7 +237,7 @@ let runTool = Tool(
 /// Action tool: starts one allowlisted shortcut in the background and returns a job id immediately.
 let runAsyncTool = Tool(
     name: "run_shortcut_async",
-    description: "Start an allowlisted Apple Shortcut in the background and immediately return a job_id. Has no duration limit — this is the recommended way to run any shortcut, not just slow ones. Poll get_shortcut_result with the job_id to retrieve the outcome. Shortcuts flagged side_effect require confirm=true at submission.",
+    description: "Start an allowlisted Apple Shortcut in the background and immediately return a job_id. Has no duration limit — this is the recommended way to run any shortcut, not just slow ones. Poll get_shortcut_result with the job_id to retrieve the outcome. A shortcut flagged side_effect changes something on the user's Mac: ask the user and get their approval first, then pass confirm=true. Never set confirm=true on your own initiative.",
     inputSchema: .object([
         "type": .string("object"),
         "properties": .object([

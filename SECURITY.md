@@ -43,6 +43,12 @@ when assessing reports:
   bounds *which* runs require that assertion; it does not independently authenticate
   the user. An entry whose `side_effect` is unspecified is treated as `true`
   (confirmation required) by default.
+
+  Because that assertion is the whole gate, the wording the assistant reads is
+  part of the control. Both run tools' descriptions, the refusal message, and the
+  server's MCP `instructions` all state that the user must be asked first and that
+  `confirm=true` must never be set unprompted. Treat a change that weakens or
+  removes that wording as a security-relevant change, not an editorial one.
 - **No shell interpolation.** The `shortcuts` binary is invoked with an argument
   vector via `Process`, never by building a shell string, so shortcut names and
   input cannot inject shell commands.

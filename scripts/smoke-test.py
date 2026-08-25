@@ -179,7 +179,8 @@ class Server:
         """Performs the MCP initialize handshake.
 
         Returns:
-            dict: The server's reported serverInfo.
+            dict: The full initialize result, including serverInfo and any
+            server-level `instructions`.
         """
         response = self.request("initialize", {
             "protocolVersion": "2025-06-18",
@@ -187,7 +188,7 @@ class Server:
             "clientInfo": {"name": "smoke-test", "version": "1.0"},
         })
         self.notify("notifications/initialized")
-        return response["result"]["serverInfo"]
+        return response["result"]
 
     def close(self, expect_clean_exit=False):
         """Shuts the server down and cleans up its temporary allowlist.
@@ -281,6 +282,33 @@ def run_job_lifecycle_checks(server):
     check("unknown job id refused", is_error is True and "Unknown job id" in str(unknown))
 
 
+def run_instructions_checks(init_result):
+    """Checks the server-level `instructions` returned at initialize.
+
+    This is the LLM-facing manual: cross-tool guidance a client may inject into
+    the model's context. Client support is uneven, so nothing here may be the
+    only place a rule is stated -- but the field must be present and must carry
+    the rules that span tools.
+
+    Args:
+        init_result (dict): The full initialize result from the handshake.
+    """
+    print("\n[server instructions]")
+    text = init_result.get("instructions") or ""
+    if not check("instructions present in initialize result", bool(text.strip()),
+                 f"{len(text)} chars"):
+        return
+    lowered = text.lower()
+    check("tells the model to discover via list_shortcuts", "list_shortcuts" in lowered)
+    check("steers toward the async path", "run_shortcut_async" in lowered)
+    check("explains queued/running is not an error",
+          "queued" in lowered and "running" in lowered)
+    check("states the consent rule", "confirm=true" in lowered and "approval" in lowered)
+    check("forbids self-authorizing a side-effecting run",
+          "never set confirm=true" in lowered)
+    check("explains expired job ids", "expired" in lowered)
+
+
 def run_sync_and_gate_checks(server):
     """Checks the synchronous run path and the allowlist/side-effect gate.
 
@@ -304,6 +332,9 @@ def run_sync_and_gate_checks(server):
     check("side_effect requires confirm", is_error is True and "confirm=true" in str(refusal))
     check("side_effect refusal names the async tool", "run_shortcut_async" in str(refusal),
           "refusal must tell the model which tool to re-call")
+    check("side_effect refusal directs the model to the user",
+          "confirmation" in str(refusal).lower(),
+          "the refusal must say to ask the user, not just to set the flag")
 
 
 def run_wait_seconds_checks(server, slow_name, slow_input):
@@ -397,8 +428,10 @@ def main():
 
     server = Server(args.binary, allowlist)
     try:
-        info = server.handshake()
+        init_result = server.handshake()
+        info = init_result["serverInfo"]
         print(f"[handshake]\n  ok   connected to {info['name']} {info['version']}")
+        run_instructions_checks(init_result)
         run_tool_surface_checks(server)
         run_job_lifecycle_checks(server)
         run_sync_and_gate_checks(server)

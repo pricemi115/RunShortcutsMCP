@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finish, and so is still bound by the MCP client's roughly one-minute limit. Its
   description now says so plainly and points at `run_shortcut_async` instead.
 
+### Security
+
+- **The confirmation rule for `side_effect` shortcuts is now stated
+  unambiguously.** It previously read only "shortcuts flagged side_effect require
+  confirm=true", which an assistant could reasonably act on by simply setting the
+  flag — approving a state-changing shortcut on the user's behalf without ever
+  asking. Both run tools now say explicitly to obtain the user's approval first
+  and never to set `confirm=true` unprompted. This server runs headless and
+  cannot verify consent itself, so this wording is what the safety gate rests on.
+- **The server now sends MCP `instructions`** describing how its tools work
+  together — discovery order, which run tool to prefer, and the consent rule.
+  Clients that pass this to their assistant give it that guidance up front rather
+  than leaving it to be discovered through refusals. Support varies by client, so
+  every rule that matters is still stated in the individual tool descriptions too.
+
 ## [1.1.0] - 2026-07-26
 
 ### Fixed
