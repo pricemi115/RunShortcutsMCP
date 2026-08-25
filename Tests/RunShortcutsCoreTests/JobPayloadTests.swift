@@ -15,7 +15,7 @@ import XCTest
 final class JobPayloadTests: XCTestCase {
 
     func testJobStatusOmitsResultFieldsWhileNonTerminal() throws {
-        let job = Job(id: "job_aaaaaaaa", shortcutName: "Test", state: .running, submittedAt: Date(), startedAt: Date())
+        let job = Job(id: "job_aaaaaaaa", shortcutName: "Test", state: .running, submittedAt: Date(), submittedUptime: 100, startedUptime: 100)
         let json = JobStatus(job: job).jsonString()
 
         XCTAssertTrue(json.contains("\"elapsed_seconds\""))
@@ -26,9 +26,9 @@ final class JobPayloadTests: XCTestCase {
     }
 
     func testJobStatusIncludesResultFieldsWhenTerminal() throws {
-        var job = Job(id: "job_bbbbbbbb", shortcutName: "Test", state: .succeeded, submittedAt: Date())
-        job.startedAt = Date()
-        job.finishedAt = Date()
+        var job = Job(id: "job_bbbbbbbb", shortcutName: "Test", state: .succeeded, submittedAt: Date(), submittedUptime: 100)
+        job.startedUptime = 100
+        job.finishedUptime = 142
         job.result = ShortcutResult(exitCode: 0, stdout: "hi", stderr: "", timedOut: false)
 
         let json = JobStatus(job: job).jsonString()
@@ -36,17 +36,29 @@ final class JobPayloadTests: XCTestCase {
         XCTAssertTrue(json.contains("\"stdout\""))
         XCTAssertTrue(json.contains("\"stderr\""))
         XCTAssertTrue(json.contains("\"exit_code\""))
-        XCTAssertTrue(json.contains("\"duration_seconds\""))
         XCTAssertFalse(json.contains("\"elapsed_seconds\""))
+        // Derived from the monotonic readings (142 - 100), not from the Dates.
+        XCTAssertTrue(json.contains("\"duration_seconds\" : 42"), json)
+    }
+
+    /// `elapsed_seconds` on a running job counts from its monotonic start, so a
+    /// wall-clock change between submission and the poll cannot distort it.
+    func testElapsedSecondsUsesMonotonicReadings() throws {
+        let job = Job(
+            id: "job_ffffffff", shortcutName: "Test", state: .running,
+            submittedAt: Date(timeIntervalSince1970: 0), submittedUptime: 100, startedUptime: 110
+        )
+        let json = JobStatus(job: job, uptime: 135).jsonString()
+        XCTAssertTrue(json.contains("\"elapsed_seconds\" : 25"), json)
     }
 
     /// A cancelled job omits `exit_code`/`timed_out` (a signal-derived exit
     /// status isn't meaningful) but keeps any output actually captured before
     /// the kill, plus a `message` explaining the state.
     func testJobStatusForCancelledJobOmitsExitCodeButKeepsPartialOutput() throws {
-        var job = Job(id: "job_cccccccc", shortcutName: "Test", state: .cancelled, submittedAt: Date())
-        job.startedAt = Date()
-        job.finishedAt = Date()
+        var job = Job(id: "job_cccccccc", shortcutName: "Test", state: .cancelled, submittedAt: Date(), submittedUptime: 100)
+        job.startedUptime = 100
+        job.finishedUptime = 142
         job.result = ShortcutResult(exitCode: -15, stdout: "partial", stderr: "", timedOut: false)
 
         let json = JobStatus(job: job).jsonString()
@@ -59,7 +71,7 @@ final class JobPayloadTests: XCTestCase {
     }
 
     func testJobSubmissionKeySet() throws {
-        let job = Job(id: "job_dddddddd", shortcutName: "Test", state: .queued, submittedAt: Date())
+        let job = Job(id: "job_dddddddd", shortcutName: "Test", state: .queued, submittedAt: Date(), submittedUptime: 100)
         let json = JobSubmission(job: job).jsonString()
         for key in ["job_id", "shortcut", "state", "submitted_at"] {
             XCTAssertTrue(json.contains("\"\(key)\""), "missing key \(key)")
@@ -67,8 +79,8 @@ final class JobPayloadTests: XCTestCase {
     }
 
     func testJobListingNeverContainsOutput() throws {
-        var job = Job(id: "job_eeeeeeee", shortcutName: "Test", state: .succeeded, submittedAt: Date())
-        job.finishedAt = Date()
+        var job = Job(id: "job_eeeeeeee", shortcutName: "Test", state: .succeeded, submittedAt: Date(), submittedUptime: 100)
+        job.finishedUptime = 142
         job.result = ShortcutResult(exitCode: 0, stdout: "should not appear", stderr: "nor this", timedOut: false)
 
         let json = jobListingJSONString([job])

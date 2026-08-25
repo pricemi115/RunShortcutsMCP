@@ -29,16 +29,40 @@ private actor ConcurrencyProbe {
     func exit() { current -= 1 }
 }
 
-/// A manually advanced clock, injected into `JobStore` so TTL/watchdog reaping
-/// is testable without waiting out real minutes.
+/// A manually advanced pair of clocks, injected into `JobStore` so TTL/watchdog
+/// reaping is testable without waiting out real minutes.
+///
+/// Models the wall clock and the monotonic clock separately, which is what makes
+/// clock-change behaviour testable: `advance(by:)` moves both, as ordinary time
+/// passing does, while `stepWallClock(by:)` moves only the wall clock, as a
+/// manual clock change or a large NTP correction does on a real system.
 private final class TestClock: @unchecked Sendable {
     private let lock = NSLock()
-    private var current: Date
-    init(_ date: Date = Date()) { current = date }
-    func advance(by seconds: TimeInterval) {
-        lock.lock(); current = current.addingTimeInterval(seconds); lock.unlock()
+    private var wall: Date
+    private var monotonic: TimeInterval
+
+    init(_ date: Date = Date(), uptime: TimeInterval = 10_000) {
+        wall = date
+        monotonic = uptime
     }
-    func now() -> Date { lock.lock(); defer { lock.unlock() }; return current }
+
+    /// Ordinary time passing: both clocks move together.
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        wall = wall.addingTimeInterval(seconds)
+        monotonic += seconds
+        lock.unlock()
+    }
+
+    /// A clock change: the wall clock jumps, the monotonic clock does not.
+    func stepWallClock(by seconds: TimeInterval) {
+        lock.lock()
+        wall = wall.addingTimeInterval(seconds)
+        lock.unlock()
+    }
+
+    func now() -> Date { lock.lock(); defer { lock.unlock() }; return wall }
+    func uptime() -> TimeInterval { lock.lock(); defer { lock.unlock() }; return monotonic }
 }
 
 private struct LaunchError: Error {}
@@ -99,7 +123,8 @@ final class JobStoreTests: XCTestCase {
         let store = JobStore(
             execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") },
             retention: 600,
-            now: { clock.now() }
+            now: { clock.now() },
+            uptime: { clock.uptime() }
         )
         let submitted = await store.submit(shortcutName: "Test", input: nil)
         _ = await store.wait(for: submitted.id, timeout: 2)
@@ -381,7 +406,8 @@ final class JobStoreTests: XCTestCase {
             },
             maxConcurrent: 1,
             watchdogTimeout: 60,
-            now: { clock.now() }
+            now: { clock.now() },
+            uptime: { clock.uptime() }
         )
 
         let wedged = await store.submit(shortcutName: "Wedged", input: nil)
@@ -430,7 +456,8 @@ final class JobStoreTests: XCTestCase {
                 return ShortcutResult(exitCode: 0, stdout: "finished", stderr: "")
             },
             watchdogTimeout: 60,
-            now: { clock.now() }
+            now: { clock.now() },
+            uptime: { clock.uptime() }
         )
         let job = await store.submit(shortcutName: "Stuck", input: nil)
         while await store.job(id: job.id)?.state != .running {
@@ -443,6 +470,91 @@ final class JobStoreTests: XCTestCase {
         let waited = await store.wait(for: job.id, timeout: 2)
         let finished = try XCTUnwrap(waited)
         XCTAssertEqual(finished.state, .cancelled)
+    }
+
+    // MARK: - Clock changes
+
+    /// A forward wall-clock jump must not make a healthy running job look
+    /// abandoned. The watchdog measures against the monotonic clock, which a
+    /// clock change cannot move.
+    func testForwardWallClockStepDoesNotTripWatchdog() async throws {
+        let clock = TestClock()
+        let gate = Gate()
+        let store = JobStore(
+            execute: { _, _ in
+                for _ in 0..<500 {
+                    if await gate.isReleased() { break }
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                return ShortcutResult(exitCode: 0, stdout: "", stderr: "")
+            },
+            watchdogTimeout: 60,
+            now: { clock.now() },
+            uptime: { clock.uptime() }
+        )
+        let job = await store.submit(shortcutName: "Long", input: nil)
+        while await store.job(id: job.id)?.state != .running {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        // The user sets their clock forward a day. No real time has passed.
+        clock.stepWallClock(by: 86_400)
+        _ = await store.allJobs() // triggers reap
+
+        let after = await store.job(id: job.id)
+        XCTAssertEqual(after?.state, .running, "a wall-clock jump must not strand a healthy job")
+
+        await gate.release()
+    }
+
+    /// A forward wall-clock jump must not expire a result that is seconds old,
+    /// while genuine elapsed time still does.
+    func testForwardWallClockStepDoesNotExpireResults() async throws {
+        let clock = TestClock()
+        let store = JobStore(
+            execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") },
+            retention: 600,
+            now: { clock.now() },
+            uptime: { clock.uptime() }
+        )
+        let job = await store.submit(shortcutName: "Test", input: nil)
+        _ = await store.wait(for: job.id, timeout: 2)
+
+        clock.stepWallClock(by: 86_400)
+        let survived = await store.job(id: job.id)
+        XCTAssertNotNil(survived, "a wall-clock jump must not expire a fresh result")
+
+        // Real elapsed time still retires it on schedule.
+        clock.advance(by: 601)
+        let expired = await store.job(id: job.id)
+        XCTAssertNil(expired)
+    }
+
+    /// A backward wall-clock step must not stretch a bounded wait. This is the
+    /// most consequential of the three: `wait_seconds` is capped below the MCP
+    /// client's request ceiling, so a wait that overruns reintroduces exactly the
+    /// timeout failure the async design exists to prevent. The injected wall clock
+    /// here never advances on its own, so a `Date`-based deadline would never be
+    /// reached and the call would run until the job finished five seconds later.
+    func testBackwardWallClockStepDoesNotExtendWait() async throws {
+        let clock = TestClock()
+        let store = JobStore(
+            execute: { _, _ in
+                try? await Task.sleep(for: .seconds(5))
+                return ShortcutResult(exitCode: 0, stdout: "", stderr: "")
+            },
+            now: { clock.now() }
+            // uptime deliberately left as the real monotonic default
+        )
+        let job = await store.submit(shortcutName: "Slow", input: nil)
+        clock.stepWallClock(by: -3600)
+
+        let start = Date()
+        let waited = await store.wait(for: job.id, timeout: 0.5)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertFalse(try XCTUnwrap(waited).state.isTerminal)
+        XCTAssertLessThan(elapsed, 2.0, "a backward wall-clock step must not extend a bounded wait")
     }
 
     // MARK: - Lookup semantics

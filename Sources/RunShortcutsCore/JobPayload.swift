@@ -85,24 +85,25 @@ public struct JobStatus: Codable, Sendable {
     public let message: String?
 
     /// Builds a status payload from a job snapshot.
+    ///
+    /// Both reported durations are derived from the job's monotonic readings
+    /// rather than wall-clock `Date`s, so a clock change mid-job can't produce a
+    /// negative or wildly inflated elapsed time.
     /// - Parameters:
     ///   - job: (`Job`) The job snapshot to render.
-    ///   - now: (`Date`) The current time, used to compute `elapsed_seconds` for a non-terminal job.
-    public init(job: Job, now: Date = Date()) {
+    ///   - uptime: (`TimeInterval`) The current monotonic reading, used to compute `elapsed_seconds` for a non-terminal job.
+    public init(job: Job, uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         job_id = job.id
         shortcut = job.shortcutName
         state = job.state.rawValue
 
+        let begunUptime = job.startedUptime ?? job.submittedUptime
         if job.state.isTerminal {
             elapsed_seconds = nil
-            if let finishedAt = job.finishedAt {
-                duration_seconds = Int(finishedAt.timeIntervalSince(job.startedAt ?? job.submittedAt))
-            } else {
-                duration_seconds = nil
-            }
+            duration_seconds = job.finishedUptime.map { Int($0 - begunUptime) }
         } else {
             duration_seconds = nil
-            elapsed_seconds = Int(now.timeIntervalSince(job.startedAt ?? job.submittedAt))
+            elapsed_seconds = Int(uptime - begunUptime)
         }
 
         if job.state == .cancelled {
@@ -166,8 +167,8 @@ public struct JobListing: Codable, Sendable {
         shortcut = job.shortcutName
         state = job.state.rawValue
         submitted_at = iso8601(job.submittedAt)
-        if job.state.isTerminal, let finishedAt = job.finishedAt {
-            duration_seconds = Int(finishedAt.timeIntervalSince(job.startedAt ?? job.submittedAt))
+        if job.state.isTerminal, let finishedUptime = job.finishedUptime {
+            duration_seconds = Int(finishedUptime - (job.startedUptime ?? job.submittedUptime))
         } else {
             duration_seconds = nil
         }

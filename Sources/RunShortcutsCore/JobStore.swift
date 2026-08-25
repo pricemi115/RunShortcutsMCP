@@ -41,6 +41,15 @@ public enum JobState: String, Codable, Sendable, Equatable {
 /// A snapshot of one background shortcut job. Returned by every `JobStore`
 /// query as an independent value — mutating a returned `Job` never affects the
 /// store's own record.
+///
+/// Two clocks are deliberately tracked, and they are not interchangeable:
+/// `submittedAt` is a wall-clock `Date` used only to *report* when the job was
+/// submitted, while the `…Uptime` values are monotonic readings used for every
+/// elapsed-time decision. Wall-clock time can jump — a manual clock change or a
+/// large NTP correction moves `Date()` — which would otherwise let a healthy job
+/// be declared abandoned, expire a fresh result, or stretch a bounded wait past
+/// the MCP client's request ceiling. Nothing that measures a *duration* may read
+/// `submittedAt`.
 public struct Job: Sendable, Equatable {
     /// (`String`) Opaque job identifier (`job_` + 8 lowercase hex characters), unique for the store's lifetime.
     public let id: String
@@ -48,12 +57,14 @@ public struct Job: Sendable, Equatable {
     public let shortcutName: String
     /// (`JobState`) The job's current lifecycle state.
     public var state: JobState
-    /// (`Date`) When the job was submitted.
+    /// (`Date`) Wall-clock submission time, reported to the client as `submitted_at`. Never used to measure elapsed time.
     public let submittedAt: Date
-    /// (`Date?`) When the job left `queued` and began running; `nil` until then.
-    public var startedAt: Date?
-    /// (`Date?`) When the job reached a terminal state; `nil` until then.
-    public var finishedAt: Date?
+    /// (`TimeInterval`) Monotonic reading taken when the job was submitted.
+    public let submittedUptime: TimeInterval
+    /// (`TimeInterval?`) Monotonic reading taken when the job left `queued` and began running; `nil` until then.
+    public var startedUptime: TimeInterval?
+    /// (`TimeInterval?`) Monotonic reading taken when the job reached a terminal state; `nil` until then.
+    public var finishedUptime: TimeInterval?
     /// (`ShortcutResult?`) The captured invocation result; `nil` until terminal, and always `nil` for `.cancelled`.
     public var result: ShortcutResult?
     /// (`String?`) A client-safe failure description, set only when the shortcut could not be launched at all. Detailed errors are logged by the caller, not stored here (mirrors the existing `run_shortcut` CWE-209 discipline).
@@ -82,17 +93,27 @@ public actor JobStore {
     /// (`TimeInterval`) How long a terminal job's result stays readable after it finishes.
     private let retention: TimeInterval
 
-    /// (`TimeInterval`) A `.running` job older than this (measured from `startedAt`) is
-    /// presumed abandoned — e.g. a child in an uninterruptible sleep that never closes
-    /// its pipes — and is cancelled. Deliberately a single conservative constant rather
-    /// than each job's own configured timeout: `ShortcutsRunner.invoke` already enforces
-    /// that timeout itself, so this only ever fires for a job that has outlived even the
-    /// widest possible legitimate async timeout, which means it is definitely stuck.
+    /// (`TimeInterval`) A `.running` job older than this (measured monotonically from
+    /// when it started) is presumed abandoned — e.g. a child in an uninterruptible sleep
+    /// that never closes its pipes — and is cancelled. Deliberately a single conservative
+    /// constant rather than each job's own configured timeout: `ShortcutsRunner.invoke`
+    /// already enforces that timeout itself, so this only ever fires for a job that has
+    /// outlived even the widest possible legitimate async timeout, which means it is
+    /// definitely stuck.
     private let watchdogTimeout: TimeInterval
 
-    /// (`() -> Date`) The store's clock. Injected so TTL/watchdog reaping is testable
-    /// without waiting out real minutes.
+    /// (`() -> Date`) Wall-clock source, used only for the `submitted_at` timestamp
+    /// reported to clients. Injected for testability.
     private let now: @Sendable () -> Date
+
+    /// (`() -> TimeInterval`) Monotonic source backing every elapsed-time decision:
+    /// the watchdog, result retention, and `wait(for:timeout:)`. Defaults to
+    /// `ProcessInfo.systemUptime`, which cannot be moved by a clock change and — like
+    /// the `DispatchTime` deadline `ShortcutsRunner` enforces its own timeout with —
+    /// does not advance while the system is asleep, so the two layers agree on how
+    /// long a job has actually been running. Injected so retention and the watchdog
+    /// are testable without waiting out real minutes.
+    private let uptime: @Sendable () -> TimeInterval
 
     /// (`[String: Job]`) All tracked jobs, keyed by id.
     private var jobs: [String: Job] = [:]
@@ -122,7 +143,8 @@ public actor JobStore {
     ///   - maxRetainedBytes: (`Int`) Maximum combined stdout+stderr bytes retained across terminal jobs; defaults to `64_000_000`.
     ///   - retention: (`TimeInterval`) Seconds a terminal job's result stays readable after finishing; defaults to `600`.
     ///   - watchdogTimeout: (`TimeInterval`) Seconds after which a still-`.running` job is presumed abandoned and cancelled; defaults to the widest async timeout plus a 30s grace.
-    ///   - now: (`@Sendable () -> Date`) The store's clock; defaults to the real time.
+    ///   - now: (`@Sendable () -> Date`) Wall-clock source for the reported `submitted_at` timestamp; defaults to the real time.
+    ///   - uptime: (`@Sendable () -> TimeInterval`) Monotonic source for every elapsed-time decision; defaults to `ProcessInfo.systemUptime`.
     public init(
         execute: @escaping @Sendable (_ name: String, _ input: String?) async throws -> ShortcutResult,
         maxConcurrent: Int = 4,
@@ -130,7 +152,8 @@ public actor JobStore {
         maxRetainedBytes: Int = 64_000_000,
         retention: TimeInterval = 600,
         watchdogTimeout: TimeInterval = ShortcutsRunner.asyncTimeoutRange.upperBound + 30,
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.execute = execute
         self.maxConcurrent = maxConcurrent
@@ -139,6 +162,7 @@ public actor JobStore {
         self.retention = retention
         self.watchdogTimeout = watchdogTimeout
         self.now = now
+        self.uptime = uptime
     }
 
     // MARK: - Public surface
@@ -150,9 +174,9 @@ public actor JobStore {
     ///   - input: (`String?`) Text/JSON passed to the shortcut's stdin; `nil` for none.
     /// - Returns: (`Job`) The newly created job, in `.queued` state.
     public func submit(shortcutName: String, input: String?) -> Job {
-        reap(now: now())
+        reap()
         let id = generateID()
-        let job = Job(id: id, shortcutName: shortcutName, state: .queued, submittedAt: now())
+        let job = Job(id: id, shortcutName: shortcutName, state: .queued, submittedAt: now(), submittedUptime: uptime())
         jobs[id] = job
         runningTasks[id] = Task { [self] in
             await runJob(id: id, shortcutName: shortcutName, input: input)
@@ -164,15 +188,15 @@ public actor JobStore {
     /// - Parameter id: (`String`) The job id.
     /// - Returns: (`Job?`) The job, or `nil` if it never existed or its result has expired.
     public func job(id: String) -> Job? {
-        reap(now: now())
+        reap()
         return jobs[id]
     }
 
     /// Lists every currently tracked job (queued, running, and not-yet-expired terminal), oldest first.
     /// - Returns: (`[Job]`) Jobs sorted by submission time.
     public func allJobs() -> [Job] {
-        reap(now: now())
-        return jobs.values.sorted { $0.submittedAt < $1.submittedAt }
+        reap()
+        return jobs.values.sorted { $0.submittedUptime < $1.submittedUptime }
     }
 
     /// Waits for a job to reach a terminal state, up to `timeout` seconds, then
@@ -190,11 +214,11 @@ public actor JobStore {
     ///   - timeout: (`TimeInterval`) Maximum seconds to wait.
     /// - Returns: (`Job?`) The job's snapshot at completion, timeout, or caller cancellation; `nil` if the id is unknown.
     public func wait(for id: String, timeout: TimeInterval) async -> Job? {
-        let deadline = now().addingTimeInterval(timeout)
+        let deadline = uptime() + timeout
         while true {
-            reap(now: now())
+            reap()
             guard let current = jobs[id] else { return nil }
-            if current.state.isTerminal || now() >= deadline || Task.isCancelled { return current }
+            if current.state.isTerminal || uptime() >= deadline || Task.isCancelled { return current }
             try? await Task.sleep(for: .milliseconds(200))
         }
     }
@@ -211,7 +235,7 @@ public actor JobStore {
     /// - Returns: (`Job?`) The job's current snapshot after the request; `nil` if the id is unknown.
     @discardableResult
     public func cancel(id: String) -> Job? {
-        reap(now: now())
+        reap()
         guard var current = jobs[id] else { return nil }
         switch current.state {
         case .queued:
@@ -220,7 +244,7 @@ public actor JobStore {
             }
             runningTasks[id]?.cancel()
             current.state = .cancelled
-            current.finishedAt = now()
+            current.finishedUptime = uptime()
             jobs[id] = current
         case .running:
             runningTasks[id]?.cancel()
@@ -269,14 +293,14 @@ public actor JobStore {
         }
         if Task.isCancelled {
             current.state = .cancelled
-            current.finishedAt = now()
+            current.finishedUptime = uptime()
             jobs[id] = current
             releaseSlot(id: id)
             return
         }
 
         current.state = .running
-        current.startedAt = now()
+        current.startedUptime = uptime()
         jobs[id] = current
 
         do {
@@ -298,7 +322,7 @@ public actor JobStore {
         // An already-terminal job was finalized by the watchdog after being
         // abandoned; a late result from its task must not resurrect or rewrite it.
         guard var current = jobs[id], !current.state.isTerminal else { return }
-        current.finishedAt = now()
+        current.finishedUptime = uptime()
         current.result = result
         if Task.isCancelled {
             current.state = .cancelled
@@ -318,7 +342,7 @@ public actor JobStore {
     ///   - message: (`String`) A client-safe description of the failure.
     private func finalizeFailure(id: String, message: String) {
         guard var current = jobs[id], !current.state.isTerminal else { return }
-        current.finishedAt = now()
+        current.finishedUptime = uptime()
         current.state = Task.isCancelled ? .cancelled : .failed
         current.failureMessage = message
         jobs[id] = current
@@ -375,15 +399,20 @@ public actor JobStore {
 
     /// Applies retention policy. Called at the top of every public accessor so
     /// reaping is driven entirely by client activity rather than a background
-    /// timer, and is fully deterministic under the injected clock. Never evicts a
+    /// timer, and is fully deterministic under the injected clocks. Never evicts a
     /// `.queued` or `.running` job outright — the watchdog transitions a stuck
     /// running job to `.cancelled` instead of deleting its record, and the
     /// eviction rules below only ever consider jobs already in a terminal state.
-    /// - Parameter now: (`Date`) The current time, per the injected clock.
-    private func reap(now: Date) {
+    ///
+    /// Every age comparison here reads the monotonic clock, never `Date`. A
+    /// wall-clock jump forward would otherwise declare healthy running jobs
+    /// abandoned and expire every retained result at once.
+    private func reap() {
+        let currentUptime = uptime()
+
         for (id, job) in jobs where job.state == .running {
-            guard let startedAt = job.startedAt,
-                  now.timeIntervalSince(startedAt) > watchdogTimeout else { continue }
+            guard let startedUptime = job.startedUptime,
+                  currentUptime - startedUptime > watchdogTimeout else { continue }
 
             // Signal first, so a job that is merely slow unwinds cooperatively
             // and terminates its own child.
@@ -399,7 +428,7 @@ public actor JobStore {
             // even when the task does eventually return.
             var abandoned = job
             abandoned.state = .cancelled
-            abandoned.finishedAt = now
+            abandoned.finishedUptime = currentUptime
             abandoned.failureMessage = "Job exceeded the \(Int(watchdogTimeout))s watchdog limit and was abandoned; its slot has been reclaimed."
             jobs[id] = abandoned
             releaseSlot(id: id)
@@ -407,7 +436,7 @@ public actor JobStore {
 
         // Rule 1: TTL — evict a terminal job `retention` seconds after it finished.
         for (id, job) in jobs where job.state.isTerminal {
-            if let finishedAt = job.finishedAt, now.timeIntervalSince(finishedAt) > retention {
+            if let finishedUptime = job.finishedUptime, currentUptime - finishedUptime > retention {
                 remove(id: id)
             }
         }
@@ -415,7 +444,7 @@ public actor JobStore {
         // Rule 2: retained-bytes budget — evict oldest-finished-first until under budget.
         var terminal = jobs.values
             .filter { $0.state.isTerminal }
-            .sorted { ($0.finishedAt ?? .distantPast) < ($1.finishedAt ?? .distantPast) }
+            .sorted { ($0.finishedUptime ?? 0) < ($1.finishedUptime ?? 0) }
         var totalBytes = terminal.reduce(0) { $0 + retainedBytes(of: $1) }
         while totalBytes > maxRetainedBytes, let oldest = terminal.first {
             totalBytes -= retainedBytes(of: oldest)
