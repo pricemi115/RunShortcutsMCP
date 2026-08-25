@@ -123,7 +123,7 @@ It's a JSON file. Each entry is keyed by the **exact name** of a Shortcut, with 
 | `input` | text | A hint about what to send: `"json"`, `"text"`, or `"none"`. Optional. |
 | `schema` | object | For JSON input, a map of field name → description. Optional; documentation only. |
 | `side_effect` | true/false | `true` if the shortcut **changes something** (sends a message, toggles a light, edits a note). When `true`, the assistant must get your explicit OK before running it. Use `false` only for read-only "just tell me something" shortcuts. **If omitted, it defaults to `true`** (confirmation required). |
-| `timeout_seconds` | number | Max seconds the shortcut may run before it's stopped. Optional; default **120**, allowed **5–300** (values outside are clamped). |
+| `timeout_seconds` | number | Max seconds the shortcut may run before it's stopped. Optional; default **120**. Allowed range depends on how the assistant runs it: **5–300** when it waits for the result directly, **5–3600** (up to an hour) when it runs the shortcut in the background — see "Time and output limits" below. Values outside the allowed range are clamped. |
 | `max_output_bytes` | number | Max bytes of output captured before the result is truncated. Optional; default **10000000** (~10 MB), allowed **1024–100000000** (1 KB–100 MB, clamped). |
 
 ### Changing the list
@@ -201,12 +201,20 @@ Think of it like leaving a voicemail for a robot: it can follow a fixed script p
 
 Every run has two safety limits. Sensible **defaults apply automatically**, and you can **override them per shortcut** in the config (see the field reference in §3):
 
-- **Time limit — default 120 seconds** (`timeout_seconds`; allowed range **5–300**). If a shortcut hasn't finished in this time, the assistant stops it. This mostly catches a shortcut stuck waiting on something (see the headless rule above) or doing too much work.
+- **Time limit — default 120 seconds** (`timeout_seconds`). If a shortcut hasn't finished in this time, the assistant stops it. This mostly catches a shortcut stuck waiting on something (see the headless rule above) or doing too much work. The allowed range depends on how the assistant runs the shortcut — see "Running slow shortcuts in the background," next.
 - **Output limit — default ~10 MB** (`max_output_bytes`; allowed range **1024–100000000** bytes, i.e. 1 KB–100 MB). Output beyond the limit is truncated.
 
 Values outside the allowed range are **clamped** to the nearest bound, so you can't accidentally disable a limit. When a limit kicks in, the assistant sees a short note (e.g. *"timed out after 120s"* or *"output truncated"*). Keep most shortcuts quick and their output modest, and raise a limit only for the specific shortcut that needs it.
 
 If you set a value outside the allowed range, it's clamped **and reported**, so you'll know: it appears next to the shortcut when you ask the assistant to *"list my shortcuts"*, in the result when that shortcut runs, and in the server log.
+
+### Running slow shortcuts in the background
+
+Claude's own connection to the helper has a roughly one-minute limit on any single request — nothing in this app's config can change that. So a shortcut that might take longer than a minute needs to run differently: the assistant starts it, gets back a **job ID** right away, and then checks back on that job ID until it's done, rather than sitting there waiting.
+
+You don't need to do anything to enable this — it's how the assistant is instructed to run shortcuts by default, and it's the reason `timeout_seconds` can go as high as **3600** (one hour) instead of just 300: a background job isn't limited by Claude's one-minute request window the way a direct wait is. If you ask the assistant to run something and it comes back saying it's "still running, checking again," that's this working as intended — not a problem to fix.
+
+A background job's result stays available for about **10 minutes** after it finishes. If the assistant loses track of a job (a very long gap between checks, or a restarted conversation), it's gone for good after that — there's no way to recover an expired result, only to run the shortcut again.
 
 ---
 
@@ -214,9 +222,10 @@ If you set a value outside the allowed range, it's clamped **and reported**, so 
 
 - **Claude doesn't see the tool.** Fully quit and reopen Claude Desktop. Double-check the `command` path points at `…/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP`. Check the log at `~/Library/Logs/Claude/mcp-server-run-shortcuts.log`.
 - **"… is not on the allowlist."** The shortcut name isn't in your `.config`, or the spelling doesn't match. Add/fix it, then restart Claude.
-- **It runs but hangs, then stops after a while.** The shortcut almost certainly isn't headless (§5) — it's waiting for a person. Remove the interactive action. (The default time limit is 120s; a genuinely slow shortcut can raise it up to 300s with `timeout_seconds` — see "Time and output limits" in §5.)
+- **It runs but hangs, then stops after a while.** The shortcut almost certainly isn't headless (§5) — it's waiting for a person. Remove the interactive action. (The default time limit is 120s; a genuinely slow shortcut can raise it up to 3600s (1 hour) with `timeout_seconds` — see "Time and output limits" in §5.)
 - **The result looks cut off, or mentions "truncated."** The shortcut returned more than the output limit (default ~10 MB). Have it return a smaller, more focused result, or raise `max_output_bytes` (up to 100 MB) for that shortcut.
 - **A "tell me…" shortcut returns nothing.** It's missing a **Stop and Output** / final **Text** action (§4.3).
+- **"Unknown job id" / "its result expired."** A background job's result is only kept for about 10 minutes after it finishes (§5). If the assistant checked back later than that, the result is gone — it needs to run the shortcut again, not keep asking about the old job.
 - **Permission errors.** Check **System Settings ▸ Privacy & Security ▸ Automation** and the relevant app (Notes, Calendar, etc.).
 
 ---

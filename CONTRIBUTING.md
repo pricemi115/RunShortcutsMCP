@@ -30,6 +30,32 @@ swift test
 To produce a signed, notarized `.app` for distribution, see the README's
 "Distribution" section (`scripts/build-app.sh` and `scripts/notarize.sh`).
 
+**Smoke test (`scripts/smoke-test.py`).** `swift test` covers `RunShortcutsCore`,
+but it cannot reach the MCP wire layer — tool declarations, argument decoding, and
+response shapes all live in `Sources/RunShortcutsMCP/main.swift`, which is
+top-level executable code with no test target. Bugs there pass a fully green
+`swift test`; one shipped that way during 1.2.0 development (`wait_seconds` was
+silently ignored whenever a client sent a bare integer instead of a decimal). The
+smoke test drives a *built* binary over real JSON-RPC to cover that seam:
+
+```bash
+./scripts/build-app.sh release
+python3 scripts/smoke-test.py
+```
+
+Stdlib Python 3 only, no dependencies. The default run touches nothing on your
+machine — it uses a deliberately nonexistent shortcut name so `shortcuts run`
+fails fast. The `wait_seconds` timing checks need a job that is observably still
+running when polled, so pass any allowlisted, side-effect-free shortcut that takes
+longer than ~30 seconds; without it those checks are skipped and say so:
+
+```bash
+python3 scripts/smoke-test.py --slow-shortcut "SomeSlowShortcut" --slow-input '{"all": true}'
+```
+
+**Add a case to the smoke test whenever you add or change a tool's arguments or
+response shape** — that is the only coverage those have.
+
 **The user manual** is authored in `assets/MANUAL.md`. Edit that file — the build
 renders it to `MANUAL.html` (via the `md2html` tool) for end users. Don't hand-edit
 generated HTML. Keep the manual to the Markdown constructs the renderer supports

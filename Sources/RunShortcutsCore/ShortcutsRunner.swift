@@ -19,16 +19,20 @@ public struct ShortcutResult: Equatable, Sendable {
     public let stdout: String
     /// (`String`) Everything the shortcut wrote to standard error.
     public let stderr: String
+    /// (`Bool`) Whether the invocation was force-terminated for exceeding its timeout.
+    public let timedOut: Bool
 
     /// Creates a result value.
     /// - Parameters:
     ///   - exitCode: (`Int32`) Process exit status.
     ///   - stdout: (`String`) Captured standard output.
     ///   - stderr: (`String`) Captured standard error.
-    public init(exitCode: Int32, stdout: String, stderr: String) {
+    ///   - timedOut: (`Bool`) Whether the invocation was force-terminated for exceeding its timeout; defaults to `false`.
+    public init(exitCode: Int32, stdout: String, stderr: String, timedOut: Bool = false) {
         self.exitCode = exitCode
         self.stdout = stdout
         self.stderr = stderr
+        self.timedOut = timedOut
     }
 }
 
@@ -41,6 +45,8 @@ public struct RunOutput: Codable, Sendable {
     public let stdout: String
     /// (`String`) Captured standard error.
     public let stderr: String
+    /// (`Bool`) Whether the invocation was force-terminated for exceeding its timeout.
+    public let timed_out: Bool
 
     /// Wraps a `ShortcutResult` for serialization.
     /// - Parameter result: (`ShortcutResult`) The captured invocation result to expose over the wire.
@@ -48,6 +54,7 @@ public struct RunOutput: Codable, Sendable {
         exit_code = result.exitCode
         stdout = result.stdout
         stderr = result.stderr
+        timed_out = result.timedOut
     }
 
     /// Serializes this output to a pretty-printed JSON string.
@@ -97,14 +104,116 @@ private final class OutputCollector: @unchecked Sendable {
     var truncated: Bool { lock.lock(); defer { lock.unlock() }; return didTruncate }
 }
 
+/// Thread-safe holder for a launched `Process`, coordinating termination requests
+/// against the child's actual lifecycle. `Process` is not `Sendable`, so every
+/// touch of it happens here, under `lock` — the same earned-`@unchecked` shape as
+/// `OutputCollector` above.
+///
+/// Two hazards this exists to prevent, neither present in a purely synchronous
+/// implementation:
+/// - A timeout work item scheduled at submission time can fire long after the
+///   child has already exited and its PID been recycled by the OS; signaling that
+///   PID would hit an unrelated process. The `running` guard prevents this.
+/// - Calling `Process.terminate()` on a process that has already exited raises on
+///   macOS. The same guard prevents this.
+private final class ProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var running = false
+    private var hasExited = false
+    private var exitStatus: Int32 = 0
+    private var timedOut = false
+    private var cancelled = false
+
+    /// Attaches the just-launched process, unless cancellation was already
+    /// requested before the attach could happen.
+    /// - Parameter process: (`Process`) The already-`run()` child process.
+    /// - Returns: (`Bool`) `false` if a cancellation raced ahead of this call — the caller must terminate `process` itself in that case, since no future timeout/cancel work item will see it as attached.
+    func attach(_ process: Process) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { return false }
+        self.process = process
+        // A fast child can exit — and `markExited` can run — before this call is
+        // reached, so treat it as running only if that hasn't already happened.
+        running = !hasExited
+        return true
+    }
+
+    /// Records the child's exit status. Called exactly once, from `Process.terminationHandler`.
+    /// - Parameter status: (`Int32`) The process's `terminationStatus`.
+    func markExited(status: Int32) {
+        lock.lock(); defer { lock.unlock() }
+        running = false
+        hasExited = true
+        exitStatus = status
+    }
+
+    /// Marks that the wall-clock timeout fired.
+    func markTimedOut() {
+        lock.lock(); defer { lock.unlock() }
+        timedOut = true
+    }
+
+    /// The attached process, but only while it is genuinely still alive — our own
+    /// bookkeeping and Foundation's own view must both agree. This is the single
+    /// guard behind every signal this type sends; see the type's doc comment for
+    /// why signalling an already-exited process is unsafe.
+    /// - Returns: (`Process?`) The live child, or `nil` if none is attached or it has exited.
+    private func liveTarget() -> Process? {
+        lock.lock(); defer { lock.unlock() }
+        guard running, !hasExited, let process, process.isRunning else { return nil }
+        return process
+    }
+
+    /// Requests cancellation: latches `didCancel`, and terminates the attached
+    /// process if one is currently running.
+    /// - Returns: (`Bool`) `true` if a live process was signaled; `false` if none was attached yet (in which case the caller of the eventual `attach(_:)` is responsible for terminating the process it just launched).
+    @discardableResult
+    func requestCancel() -> Bool {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+        guard let target = liveTarget() else { return false }
+        target.terminate()
+        return true
+    }
+
+    /// Sends `SIGTERM` if the process is still attached and running; a no-op otherwise.
+    func terminateIfRunning() {
+        liveTarget()?.terminate()
+    }
+
+    /// Sends `SIGKILL` if the process is still attached and running; a no-op otherwise.
+    func killIfRunning() {
+        guard let target = liveTarget() else { return }
+        kill(target.processIdentifier, SIGKILL)
+    }
+
+    /// (`Int32`) The recorded exit status; `0` until `markExited(status:)` has been called.
+    var status: Int32 { lock.lock(); defer { lock.unlock() }; return exitStatus }
+
+    /// (`Bool`) Whether the wall-clock timeout fired.
+    var didTimeOut: Bool { lock.lock(); defer { lock.unlock() }; return timedOut }
+
+    /// (`Bool`) Whether cancellation was requested.
+    var didCancel: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+}
+
 /// Runs the macOS `shortcuts` CLI as a subprocess. Stateless and `Sendable`; the
 /// executable path is configurable to ease testing.
 public struct ShortcutsRunner: Sendable {
     /// (`TimeInterval`) Default per-run timeout applied when a shortcut specifies none.
     public static let defaultTimeout: TimeInterval = 120
 
-    /// (`ClosedRange<TimeInterval>`) Allowed bounds (seconds) for a configured timeout.
+    /// (`ClosedRange<TimeInterval>`) Allowed bounds (seconds) for a configured timeout
+    /// on a synchronous `run_shortcut` call, which must fit inside the MCP client's
+    /// own request-timeout ceiling.
     public static let timeoutRange: ClosedRange<TimeInterval> = 5...300
+
+    /// (`ClosedRange<TimeInterval>`) Allowed bounds (seconds) for a configured timeout
+    /// on an asynchronous job (`run_shortcut_async`), which is not bound by the
+    /// synchronous client-side ceiling.
+    public static let asyncTimeoutRange: ClosedRange<TimeInterval> = 5...3600
 
     /// (`Int`) Default per-stream output cap applied when a shortcut specifies none.
     public static let defaultMaxOutputBytes: Int = 10_000_000
@@ -135,8 +244,8 @@ public struct ShortcutsRunner: Sendable {
     /// Lists the shortcuts installed on this machine (`shortcuts list`).
     /// - Returns: (`[String]`) Installed shortcut names, trimmed, with blank lines removed.
     /// - Throws: An error from `Process.run()` (e.g. the binary is missing or not executable).
-    public func list() throws -> [String] {
-        let result = try invoke(arguments: ["list"], input: nil)
+    public func list() async throws -> [String] {
+        let result = try await invoke(arguments: ["list"], input: nil)
         return result.stdout
             .split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -149,8 +258,8 @@ public struct ShortcutsRunner: Sendable {
     ///   - input: (`String?`) Text/JSON written to the shortcut's stdin; `nil` to send nothing.
     /// - Returns: (`ShortcutResult`) The captured exit code, stdout, and stderr.
     /// - Throws: An error from `Process.run()` if the subprocess cannot be launched.
-    public func run(name: String, input: String?) throws -> ShortcutResult {
-        try invoke(arguments: ["run", name], input: input)
+    public func run(name: String, input: String?) async throws -> ShortcutResult {
+        try await invoke(arguments: ["run", name], input: input)
     }
 
     /// Spawns `executable` with the given arguments, feeds `input` to stdin, captures
@@ -159,14 +268,19 @@ public struct ShortcutsRunner: Sendable {
     /// stdout and stderr are drained concurrently to avoid a pipe-buffer deadlock
     /// (CWE-833); stdin is written on a background queue so a full pipe can't block;
     /// captured output is capped to bound memory (CWE-400); and a child that outlives
-    /// `timeout` is terminated (SIGTERM, then SIGKILL after a short grace). Internal
-    /// (not private) so it can be unit-tested with arbitrary executables/arguments.
+    /// `timeout` is terminated (SIGTERM, then SIGKILL after a short grace). Runs
+    /// entirely off the calling task's cooperative thread — the only suspension point
+    /// is the single continuation resumed once the child has exited and both streams
+    /// have reached EOF — so a long-running invocation never blocks other work.
+    /// Cooperative with `Task` cancellation: cancelling the calling task terminates
+    /// the child. Internal (not private) so it can be unit-tested with arbitrary
+    /// executables/arguments.
     /// - Parameters:
     ///   - arguments: (`[String]`) Argument vector passed to the process (no shell involved).
     ///   - input: (`String?`) Data written to the child's stdin as UTF-8; `nil` to write nothing.
-    /// - Returns: (`ShortcutResult`) The captured exit status and streams; truncation/timeout notes are appended to stderr.
+    /// - Returns: (`ShortcutResult`) The captured exit status and streams; truncation/timeout/cancellation notes are appended to stderr.
     /// - Throws: An error from `Process.run()` if the subprocess cannot be launched.
-    func invoke(arguments: [String], input: String?) throws -> ShortcutResult {
+    func invoke(arguments: [String], input: String?) async throws -> ShortcutResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -178,79 +292,118 @@ public struct ShortcutsRunner: Sendable {
         process.standardError = stderrPipe
         process.standardInput = stdinPipe
 
-        // Signaled by the termination handler when the child exits.
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-
-        try process.run()
-
-        let queue = DispatchQueue(label: "dev.grumptech.runshortcutsmcp.runner", attributes: .concurrent)
-        let io = DispatchGroup()
-        let outCollector = OutputCollector(cap: maxOutputBytes)
-        let errCollector = OutputCollector(cap: maxOutputBytes)
-
         // Each handle is used only inside its own task below.
         let inHandle = stdinPipe.fileHandleForWriting
         let outHandle = stdoutPipe.fileHandleForReading
         let errHandle = stderrPipe.fileHandleForReading
 
-        // Write stdin on a background queue so a full pipe can't block the caller.
-        queue.async {
-            if let input, let data = input.data(using: .utf8) {
-                try? inHandle.write(contentsOf: data)
+        let box = ProcessBox()
+        let queue = DispatchQueue(label: "dev.grumptech.runshortcutsmcp.runner", attributes: .concurrent)
+        let io = DispatchGroup()
+        let outCollector = OutputCollector(cap: maxOutputBytes)
+        let errCollector = OutputCollector(cap: maxOutputBytes)
+        let runTimeout = timeout
+        let outputCap = maxOutputBytes
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ShortcutResult, Error>) in
+                // Signaled (via io.leave()) when the child exits, from Foundation's own
+                // callback queue — exactly once, since terminationHandler fires once per
+                // successfully launched process.
+                io.enter()
+                process.terminationHandler = { finished in
+                    box.markExited(status: finished.terminationStatus)
+                    io.leave()
+                }
+
+                do {
+                    try process.run()
+                } catch {
+                    io.leave()
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                if !box.attach(process) {
+                    // A cancellation raced ahead of attach(); the child was already
+                    // launched (process.run() above), so terminate it directly rather
+                    // than leaving it running with no future timeout/cancel work item
+                    // able to see it as attached.
+                    process.terminate()
+                }
+
+                // Write stdin on a background queue so a full pipe can't block the caller.
+                queue.async {
+                    if let input, let data = input.data(using: .utf8) {
+                        try? inHandle.write(contentsOf: data)
+                    }
+                    try? inHandle.close()
+                }
+
+                // Drain both streams concurrently until EOF.
+                io.enter()
+                queue.async {
+                    while true {
+                        let chunk = outHandle.availableData
+                        if chunk.isEmpty { break }
+                        outCollector.append(chunk)
+                    }
+                    io.leave()
+                }
+                io.enter()
+                queue.async {
+                    while true {
+                        let chunk = errHandle.availableData
+                        if chunk.isEmpty { break }
+                        errCollector.append(chunk)
+                    }
+                    io.leave()
+                }
+
+                // Enforce the timeout: SIGTERM, then SIGKILL after a short grace. Both
+                // work items are cancelled once the child has actually exited (in the
+                // io.notify block below) so a slow-firing item can never reach a process
+                // that has already gone away — see ProcessBox's doc comment.
+                let sigterm = DispatchWorkItem {
+                    box.markTimedOut()
+                    box.terminateIfRunning()
+                }
+                let sigkill = DispatchWorkItem {
+                    box.killIfRunning()
+                }
+                queue.asyncAfter(deadline: .now() + runTimeout, execute: sigterm)
+                queue.asyncAfter(deadline: .now() + runTimeout + 2, execute: sigkill)
+
+                // Fires once the exit signal and both drains have all left the group —
+                // i.e. once the child has exited and its streams have reached EOF.
+                io.notify(queue: queue) {
+                    sigterm.cancel()
+                    sigkill.cancel()
+
+                    var stderrText = String(data: errCollector.data, encoding: .utf8) ?? ""
+                    if outCollector.truncated {
+                        stderrText += "\n[runner] stdout truncated at \(outputCap) bytes."
+                    }
+                    if errCollector.truncated {
+                        stderrText += "\n[runner] stderr truncated at \(outputCap) bytes."
+                    }
+                    let timedOut = box.didTimeOut
+                    if timedOut {
+                        stderrText += "\n[runner] timed out after \(Int(runTimeout))s; process terminated."
+                    } else if box.didCancel {
+                        stderrText += "\n[runner] cancelled; process terminated."
+                    }
+
+                    continuation.resume(returning: ShortcutResult(
+                        exitCode: box.status,
+                        stdout: String(data: outCollector.data, encoding: .utf8) ?? "",
+                        stderr: stderrText,
+                        timedOut: timedOut
+                    ))
+                }
             }
-            try? inHandle.close()
+        } onCancel: {
+            box.requestCancel()
         }
-
-        // Drain both streams concurrently until EOF.
-        io.enter()
-        queue.async {
-            while true {
-                let chunk = outHandle.availableData
-                if chunk.isEmpty { break }
-                outCollector.append(chunk)
-            }
-            io.leave()
-        }
-        io.enter()
-        queue.async {
-            while true {
-                let chunk = errHandle.availableData
-                if chunk.isEmpty { break }
-                errCollector.append(chunk)
-            }
-            io.leave()
-        }
-
-        // Enforce the timeout: SIGTERM, then SIGKILL after a short grace.
-        var timedOut = false
-        if exited.wait(timeout: .now() + timeout) == .timedOut {
-            timedOut = true
-            process.terminate()
-            if exited.wait(timeout: .now() + 2) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + 2)
-            }
-        }
-
-        // Readers finish once the child's pipe ends close (on exit/kill).
-        io.wait()
-
-        var stderrText = String(data: errCollector.data, encoding: .utf8) ?? ""
-        if outCollector.truncated {
-            stderrText += "\n[runner] stdout truncated at \(maxOutputBytes) bytes."
-        }
-        if errCollector.truncated {
-            stderrText += "\n[runner] stderr truncated at \(maxOutputBytes) bytes."
-        }
-        if timedOut {
-            stderrText += "\n[runner] timed out after \(Int(timeout))s; process terminated."
-        }
-
-        return ShortcutResult(
-            exitCode: process.terminationStatus,
-            stdout: String(data: outCollector.data, encoding: .utf8) ?? "",
-            stderr: stderrText
-        )
     }
 }

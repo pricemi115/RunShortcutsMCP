@@ -4,12 +4,18 @@ A small, signed macOS MCP server (Swift) that lets an MCP client (e.g. Claude) r
 
 ## Design in one breath
 
-Two tools over stdio:
+Six tools over stdio:
 
 - `list_shortcuts` — returns the allowlisted shortcuts (description, input schema, `side_effect`, and whether each is currently installed).
-- `run_shortcut(name, input?, confirm?)` — runs `shortcuts run "<name>"`, piping `input` to stdin, returns `{ exit_code, stdout, stderr }`.
+- `run_shortcut(name, input?, confirm?)` — runs `shortcuts run "<name>"`, piping `input` to stdin, and blocks until it finishes, returning `{ exit_code, stdout, stderr, timed_out }`. Behaviourally unchanged from 1.1.x. Only suitable for shortcuts that finish well inside the MCP client's own request timeout (~60s in Claude Desktop); anything slower must use `run_shortcut_async`.
+- `run_shortcut_async(name, input?, confirm?)` — starts a shortcut in the background and returns a `job_id` immediately, with no duration limit. **This is the recommended way to run any shortcut**, not just slow ones.
+- `get_shortcut_result(job_id, wait_seconds?)` — polls a background job; waits up to `wait_seconds` (default 45, max 50) for it to finish, then reports its state and, once terminal, the captured output.
+- `cancel_shortcut_job(job_id)` — stops a queued or running background job.
+- `list_shortcut_jobs()` — lists tracked background jobs, to recover a lost `job_id`.
 
-Safety is the point: **default-deny allowlist.** Only shortcuts in the config are runnable, and any flagged `side_effect` refuse to run unless the caller passes `confirm: true` (the client is expected to get the user's OK first).
+`run_shortcut` and `run_shortcut_async` share the same allowlist and `side_effect` gate. Async jobs exist because Claude Desktop's MCP client enforces its own ~60s request timeout that no server-side configuration can override — a single `tools/call` can never safely block longer than that, regardless of what the underlying shortcut needs.
+
+Safety is the point: **default-deny allowlist.** Only shortcuts in the config are runnable, and any flagged `side_effect` refuse to run unless the caller passes `confirm: true` (the client is expected to get the user's OK first) — checked once, at submission, for both run tools; none of the read-only or cancellation tools can cause a shortcut to execute.
 
 No third-party build tooling — plain Swift Package Manager (`swift build`). The shipped binary's only dependency is the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). A separate build-time tool (`md2html`) uses Apple's [swift-markdown](https://github.com/swiftlang/swift-markdown) to render the manual to HTML; it lives in its own targets and is never linked into the distributed executable.
 
@@ -50,6 +56,20 @@ release.)
 swift build
 swift test
 ```
+
+`swift test` covers `RunShortcutsCore`. The MCP wire layer (tool declarations,
+argument decoding, response shapes) lives in top-level executable code with no
+test target, so it has a separate protocol-level smoke test that drives a built
+binary over real JSON-RPC:
+
+```bash
+./scripts/build-app.sh release && python3 scripts/smoke-test.py
+```
+
+Safe by default — it exercises the job pipeline with a nonexistent shortcut name,
+so nothing on the machine runs. Pass `--slow-shortcut <name>` (any allowlisted,
+side-effect-free shortcut taking >30s) to additionally enable the `wait_seconds`
+timing checks, which are skipped otherwise. See `CONTRIBUTING.md` for why it exists.
 
 ## Make the signed .app (milestone 1)
 
@@ -178,9 +198,9 @@ Prefer Xcode's build system? Open `Package.swift` directly in Xcode (File ▸ Op
 
 ## Notes / caveats (verify on build)
 
-- **SDK API**: written against the MCP Swift SDK 0.11.x server API (`Server`, `StdioTransport`, `withMethodHandler(ListTools/CallTool)`, `Tool(inputSchema:)`). Pre-1.0 minor versions can introduce breaking changes; if `server.start` shifts, adjust `main.swift`. The process is kept alive with a sleep loop (no reliance on version-specific helpers); the client terminates the subprocess on disconnect.
+- **SDK API**: written against the MCP Swift SDK 0.12.x server API (`Server`, `StdioTransport`, `withMethodHandler(ListTools/CallTool)`, `Tool(inputSchema:annotations:)`). Pre-1.0 minor versions can introduce breaking changes; if `server.start` shifts, adjust `main.swift`. The process is kept alive with a sleep loop (no reliance on version-specific helpers); `SIGTERM`/`SIGINT` cancel any tracked background jobs before exit, and the client terminates the subprocess on disconnect otherwise.
 - **GUI flash**: `shortcuts run` can briefly surface the Shortcuts app. Keep allowlisted shortcuts headless-safe (no interactive prompts) so runs don't hang.
-- **Subprocess safety**: the runner drains stdout/stderr concurrently, enforces a wall-clock timeout (default 120s; SIGTERM then SIGKILL) and caps captured output per stream (default 10 MB), so a hung or noisy shortcut can't wedge the server or exhaust memory. Both are overridable per shortcut in the config (`timeout_seconds` 5–300; `max_output_bytes` 1 KB–100 MB; out-of-range values are clamped). Calls are still synchronous per request.
+- **Subprocess safety**: the runner drains stdout/stderr concurrently and asynchronously (a run never blocks a cooperative thread), enforces a wall-clock timeout (default 120s; SIGTERM then SIGKILL) and caps captured output per stream (default 10 MB), so a hung or noisy shortcut can't wedge the server or exhaust memory. Both are overridable per shortcut in the config (`timeout_seconds` — 5–300 for `run_shortcut`, 5–3600 for `run_shortcut_async`; `max_output_bytes` 1 KB–100 MB; out-of-range values are clamped). Background jobs run up to 4 at a time and are reaped ~10 minutes after finishing.
 - **Notarization**: only needed to distribute to other Macs. For local use, a Developer ID signature is enough.
 
 ## Installer (.dmg)

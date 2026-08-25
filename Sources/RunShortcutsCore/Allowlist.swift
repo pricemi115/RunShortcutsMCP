@@ -71,12 +71,25 @@ public struct AllowlistEntry: Codable, Equatable, Sendable {
 
     /// Human-readable warnings for any configured limit that falls outside the allowed
     /// range (and will therefore be clamped when applied). Empty when everything is in range.
+    ///
+    /// `timeout_seconds` is checked against two ranges: a value beyond
+    /// `ShortcutsRunner.asyncTimeoutRange` (the absolute bound) is out of range for
+    /// both `run_shortcut` and `run_shortcut_async` and clamps for each; a value within
+    /// that absolute bound but beyond `ShortcutsRunner.timeoutRange` is a distinct,
+    /// non-clamping case — it's fully valid for `run_shortcut_async`, and only the
+    /// synchronous `run_shortcut` path clamps it.
     /// - Returns: (`[String]`) Zero or more messages describing the out-of-range values.
     public func limitWarnings() -> [String] {
         var messages: [String] = []
-        if let requested = timeoutSeconds, !ShortcutsRunner.timeoutRange.contains(requested) {
-            let used = requested.clamped(to: ShortcutsRunner.timeoutRange)
-            messages.append("timeout_seconds \(secondsText(requested)) is outside the allowed \(secondsText(ShortcutsRunner.timeoutRange.lowerBound))–\(secondsText(ShortcutsRunner.timeoutRange.upperBound)); using \(secondsText(used))")
+        if let requested = timeoutSeconds {
+            if !ShortcutsRunner.asyncTimeoutRange.contains(requested) {
+                let syncUsed = requested.clamped(to: ShortcutsRunner.timeoutRange)
+                let asyncUsed = requested.clamped(to: ShortcutsRunner.asyncTimeoutRange)
+                messages.append("timeout_seconds \(secondsText(requested)) is outside the allowed \(secondsText(ShortcutsRunner.asyncTimeoutRange.lowerBound))–\(secondsText(ShortcutsRunner.asyncTimeoutRange.upperBound)); using \(secondsText(syncUsed))s for run_shortcut, \(secondsText(asyncUsed))s for run_shortcut_async")
+            } else if !ShortcutsRunner.timeoutRange.contains(requested) {
+                let syncUsed = requested.clamped(to: ShortcutsRunner.timeoutRange)
+                messages.append("timeout_seconds \(secondsText(requested)) exceeds run_shortcut's \(secondsText(ShortcutsRunner.timeoutRange.upperBound))s limit; synchronous runs clamp to \(secondsText(syncUsed))s — use run_shortcut_async for the full \(secondsText(requested))s")
+            }
         }
         if let requested = maxOutputBytes, !ShortcutsRunner.outputBytesRange.contains(requested) {
             let used = requested.clamped(to: ShortcutsRunner.outputBytesRange)
@@ -152,13 +165,24 @@ public struct Allowlist: Equatable, Sendable {
         shortcuts[name] != nil
     }
 
-    /// The effective run timeout for a shortcut: its configured `timeout_seconds`
-    /// (or the default), clamped to `ShortcutsRunner.timeoutRange`.
+    /// The effective run timeout for a synchronous `run_shortcut` call: its configured
+    /// `timeout_seconds` (or the default), clamped to `ShortcutsRunner.timeoutRange`.
     /// - Parameter name: (`String`) The shortcut name.
-    /// - Returns: (`TimeInterval`) Seconds within the allowed range.
+    /// - Returns: (`TimeInterval`) Seconds within the allowed synchronous range.
     public func timeout(for name: String) -> TimeInterval {
         let requested = entry(for: name)?.timeoutSeconds ?? ShortcutsRunner.defaultTimeout
         return requested.clamped(to: ShortcutsRunner.timeoutRange)
+    }
+
+    /// The effective run timeout for an asynchronous `run_shortcut_async` job: its
+    /// configured `timeout_seconds` (or the default), clamped to the wider
+    /// `ShortcutsRunner.asyncTimeoutRange` — async jobs aren't bound by the
+    /// synchronous MCP client's request-timeout ceiling.
+    /// - Parameter name: (`String`) The shortcut name.
+    /// - Returns: (`TimeInterval`) Seconds within the allowed asynchronous range.
+    public func asyncTimeout(for name: String) -> TimeInterval {
+        let requested = entry(for: name)?.timeoutSeconds ?? ShortcutsRunner.defaultTimeout
+        return requested.clamped(to: ShortcutsRunner.asyncTimeoutRange)
     }
 
     /// The effective per-stream output cap for a shortcut: its configured
