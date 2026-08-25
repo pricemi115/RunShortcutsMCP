@@ -30,12 +30,31 @@ public enum JobState: String, Codable, Sendable, Equatable {
     case cancelled
 
     /// (`Bool`) Whether this is a final state — `true` for the four terminal cases.
-    var isTerminal: Bool {
+    public var isTerminal: Bool {
         switch self {
         case .queued, .running: return false
         case .succeeded, .failed, .timedOut, .cancelled: return true
         }
     }
+}
+
+/// Why a job could not be accepted.
+public enum JobStoreError: Error, Equatable {
+    /// Too many jobs are already queued or running. Carries the cap that was hit.
+    case queueFull(limit: Int)
+}
+
+/// The record kept for a job whose result has been retired. Retaining the fact
+/// that a job *ran* long after its output is gone is what lets a caller be told
+/// "this already happened" rather than "unknown id" — the latter reads as an
+/// invitation to run the shortcut a second time.
+public struct ExpiredJob: Sendable, Equatable {
+    /// (`String`) The retired job's id.
+    public let id: String
+    /// (`String`) The shortcut it ran.
+    public let shortcutName: String
+    /// (`JobState`) The terminal state it reached before its output was retired.
+    public let state: JobState
 }
 
 /// A snapshot of one background shortcut job. Returned by every `JobStore`
@@ -65,7 +84,10 @@ public struct Job: Sendable, Equatable {
     public var startedUptime: TimeInterval?
     /// (`TimeInterval?`) Monotonic reading taken when the job reached a terminal state; `nil` until then.
     public var finishedUptime: TimeInterval?
-    /// (`ShortcutResult?`) The captured invocation result; `nil` until terminal, and always `nil` for `.cancelled`.
+    /// (`ShortcutResult?`) The captured invocation result; `nil` until terminal. A
+    /// `.cancelled` job may still carry one — whatever the child produced before it
+    /// was killed is kept, since partial output from a side-effecting shortcut is
+    /// exactly what a caller needs to see. Its exit code is not reported (see `JobStatus`).
     public var result: ShortcutResult?
     /// (`String?`) A client-safe failure description, set only when the shortcut could not be launched at all. Detailed errors are logged by the caller, not stored here (mirrors the existing `run_shortcut` CWE-209 discipline).
     public var failureMessage: String?
@@ -79,13 +101,19 @@ public actor JobStore {
     /// a `ShortcutsRunner` itself, keeping it testable with a canned closure or a
     /// real subprocess via the same `/bin/sleep`-style seam `ShortcutsRunner`'s
     /// own tests use.
-    private let execute: @Sendable (_ name: String, _ input: String?) async throws -> ShortcutResult
+    private let execute: @Sendable (_ name: String, _ input: String?, _ timeoutOverride: TimeInterval?) async throws -> ShortcutResult
 
     /// (`Int`) Maximum jobs allowed to be `.running` at once; further submissions queue.
     private let maxConcurrent: Int
 
     /// (`Int`) Maximum terminal jobs retained at once (oldest evicted first past this).
     private let maxJobs: Int
+
+    /// (`Int`) Maximum jobs that may be queued or running at once. Distinct from
+    /// `maxConcurrent`, which throttles execution but does not bound the backlog:
+    /// without this, a caller could enqueue an unlimited number of side-effecting
+    /// runs that keep firing four at a time long after anyone is watching.
+    private let maxPending: Int
 
     /// (`Int`) Maximum combined stdout+stderr bytes retained across all terminal jobs.
     private let maxRetainedBytes: Int
@@ -130,6 +158,14 @@ public actor JobStore {
     /// handed out in submission order.
     private var waiters: [(id: String, continuation: CheckedContinuation<Bool, Never>)] = []
 
+    /// (`[ExpiredJob]`) Outcomes of jobs whose records have been retired, oldest
+    /// first. Bounded; far cheaper to keep than the results themselves, since a
+    /// tombstone holds no captured output.
+    private var tombstones: [ExpiredJob] = []
+
+    /// (`Int`) Maximum retained tombstones.
+    private let maxTombstones = 256
+
     /// (`Set<String>`) Jobs currently holding one of the `maxConcurrent` slots.
     /// Tracked by id so a slot is released exactly once, which is what makes the
     /// watchdog's forced reclamation safe.
@@ -146,9 +182,10 @@ public actor JobStore {
     ///   - now: (`@Sendable () -> Date`) Wall-clock source for the reported `submitted_at` timestamp; defaults to the real time.
     ///   - uptime: (`@Sendable () -> TimeInterval`) Monotonic source for every elapsed-time decision; defaults to `ProcessInfo.systemUptime`.
     public init(
-        execute: @escaping @Sendable (_ name: String, _ input: String?) async throws -> ShortcutResult,
+        execute: @escaping @Sendable (_ name: String, _ input: String?, _ timeoutOverride: TimeInterval?) async throws -> ShortcutResult,
         maxConcurrent: Int = 4,
         maxJobs: Int = 32,
+        maxPending: Int = 16,
         maxRetainedBytes: Int = 64_000_000,
         retention: TimeInterval = 600,
         watchdogTimeout: TimeInterval = ShortcutsRunner.asyncTimeoutRange.upperBound + 30,
@@ -158,6 +195,7 @@ public actor JobStore {
         self.execute = execute
         self.maxConcurrent = maxConcurrent
         self.maxJobs = maxJobs
+        self.maxPending = maxPending
         self.maxRetainedBytes = maxRetainedBytes
         self.retention = retention
         self.watchdogTimeout = watchdogTimeout
@@ -172,14 +210,20 @@ public actor JobStore {
     /// - Parameters:
     ///   - shortcutName: (`String`) The allowlisted shortcut name to run.
     ///   - input: (`String?`) Text/JSON passed to the shortcut's stdin; `nil` for none.
+    ///   - timeoutOverride: (`TimeInterval?`) Wall-clock limit to run this job under, handed to the injected `execute`; `nil` lets the executor apply its own default. Used by the synchronous path, which is bound by a tighter ceiling than background jobs.
     /// - Returns: (`Job`) The newly created job, in `.queued` state.
-    public func submit(shortcutName: String, input: String?) -> Job {
+    /// - Throws: (`JobStoreError.queueFull`) When `maxPending` jobs are already queued or running.
+    public func submit(shortcutName: String, input: String?, timeoutOverride: TimeInterval? = nil) throws -> Job {
         reap()
+        let pending = jobs.values.reduce(into: 0) { count, job in
+            if !job.state.isTerminal { count += 1 }
+        }
+        guard pending < maxPending else { throw JobStoreError.queueFull(limit: maxPending) }
         let id = generateID()
         let job = Job(id: id, shortcutName: shortcutName, state: .queued, submittedAt: now(), submittedUptime: uptime())
         jobs[id] = job
         runningTasks[id] = Task { [self] in
-            await runJob(id: id, shortcutName: shortcutName, input: input)
+            await runJob(id: id, shortcutName: shortcutName, input: input, timeoutOverride: timeoutOverride)
         }
         return job
     }
@@ -263,11 +307,28 @@ public actor JobStore {
         }
     }
 
-    /// Removes a job's record outright, regardless of state or retention policy.
+    /// Removes a job's record outright, regardless of state or retention policy,
+    /// leaving a tombstone behind if it had reached a terminal state.
+    ///
+    /// The tombstone matters: a caller polling an id whose result was retired must
+    /// be told the job *ran*, not that the id is unknown. "Unknown" invites running
+    /// the shortcut again, which for a side-effecting shortcut that already
+    /// succeeded means doing it twice.
     /// - Parameter id: (`String`) The job id to remove.
     private func remove(id: String) {
+        if let job = jobs[id], job.state.isTerminal {
+            tombstones.append(ExpiredJob(id: id, shortcutName: job.shortcutName, state: job.state))
+            if tombstones.count > maxTombstones { tombstones.removeFirst(tombstones.count - maxTombstones) }
+        }
         jobs.removeValue(forKey: id)
         runningTasks.removeValue(forKey: id)
+    }
+
+    /// Looks up a job whose record has been retired but whose outcome is still remembered.
+    /// - Parameter id: (`String`) The job id.
+    /// - Returns: (`ExpiredJob?`) What that job did before its result was retired, or `nil` if the id was never issued (or is old enough that even the tombstone has been dropped).
+    public func expiredJob(id: String) -> ExpiredJob? {
+        tombstones.last { $0.id == id }
     }
 
     // MARK: - Job execution
@@ -279,7 +340,8 @@ public actor JobStore {
     ///   - id: (`String`) The job id.
     ///   - shortcutName: (`String`) The shortcut name to run.
     ///   - input: (`String?`) Text/JSON to pass on stdin.
-    private func runJob(id: String, shortcutName: String, input: String?) async {
+    ///   - timeoutOverride: (`TimeInterval?`) Per-job wall-clock limit, forwarded to `execute`.
+    private func runJob(id: String, shortcutName: String, input: String?, timeoutOverride: TimeInterval?) async {
         let granted = await acquireSlot(id: id)
         guard granted else {
             // cancel(id:) already finalized this job while it was queued.
@@ -304,7 +366,7 @@ public actor JobStore {
         jobs[id] = current
 
         do {
-            let result = try await execute(shortcutName, input)
+            let result = try await execute(shortcutName, input, timeoutOverride)
             finalize(id: id, result: result)
         } catch {
             finalizeFailure(id: id, message: "Failed to run '\(shortcutName)'.")
@@ -445,8 +507,12 @@ public actor JobStore {
         var terminal = jobs.values
             .filter { $0.state.isTerminal }
             .sorted { ($0.finishedUptime ?? 0) < ($1.finishedUptime ?? 0) }
+        // The newest terminal job is never evicted here. A single job may legitimately
+        // hold more output than the whole budget (the per-stream cap exceeds it), and
+        // evicting it on the very next reap would retire a result before its caller
+        // ever had a chance to read it.
         var totalBytes = terminal.reduce(0) { $0 + retainedBytes(of: $1) }
-        while totalBytes > maxRetainedBytes, let oldest = terminal.first {
+        while totalBytes > maxRetainedBytes, terminal.count > 1, let oldest = terminal.first {
             totalBytes -= retainedBytes(of: oldest)
             remove(id: oldest.id)
             terminal.removeFirst()

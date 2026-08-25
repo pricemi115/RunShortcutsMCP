@@ -109,13 +109,19 @@ private final class OutputCollector: @unchecked Sendable {
 /// touch of it happens here, under `lock` — the same earned-`@unchecked` shape as
 /// `OutputCollector` above.
 ///
-/// Two hazards this exists to prevent, neither present in a purely synchronous
-/// implementation:
-/// - A timeout work item scheduled at submission time can fire long after the
-///   child has already exited and its PID been recycled by the OS; signaling that
-///   PID would hit an unrelated process. The `running` guard prevents this.
-/// - Calling `Process.terminate()` on a process that has already exited raises on
-///   macOS. The same guard prevents this.
+/// The hazard this exists to prevent, not present in a purely synchronous
+/// implementation: a timeout work item scheduled at submission time can fire long
+/// after the child has exited and its PID been recycled by the OS. `killIfRunning`
+/// signals a raw PID, so without a guard it could reach an unrelated process; the
+/// `liveTarget()` check narrows that window to the interval between the check and
+/// the `kill(2)` itself.
+///
+/// Note what is *not* a hazard here, since it is easy to assume otherwise:
+/// `Process.terminate()` raises `NSInvalidArgumentException` only for a process
+/// that was never launched ("task not launched"), not for one that has already
+/// exited — terminating an exited-but-launched process is a safe no-op. That is
+/// why the attach-race path in `invoke` may call `process.terminate()` directly
+/// after a successful `run()` without consulting this type.
 private final class ProcessBox: @unchecked Sendable {
     private let lock = NSLock()
     private var process: Process?

@@ -19,13 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change that. The new **`run_shortcut_async`** starts a shortcut and hands back
   a `job_id` straight away, and **`get_shortcut_result`** reports on it. This is
   now the recommended way to run any shortcut, not just slow ones.
-- **`cancel_shortcut_job`** — stops a background shortcut that is still waiting
-  or running. Note that a shortcut stopped partway may already have applied some
-  of its changes.
-- **`list_shortcut_jobs`** — lists background jobs from roughly the last ten
-  minutes, so one can be found again if its `job_id` is lost.
+- **`cancel_shortcut_job`** — stops waiting on a background shortcut and ends the
+  command that launched it. Be aware this does **not** reliably stop the shortcut
+  itself: a shortcut already under way is run by the Shortcuts app, not by this
+  helper, and will usually carry on and finish. Treat it as "stop waiting", not
+  "undo".
+- **`list_shortcut_jobs`** — lists jobs from roughly the last ten minutes, so one
+  can be found again if its `job_id` is lost.
 - **`timed_out` in the run result**, which tells a shortcut stopped for exceeding
   its time limit apart from one that simply failed.
+- **The server log now records what was run and what was refused** — one line per
+  event, noting the shortcut, whether it ran in the background, and whether the
+  assistant claimed you had approved it. Refusals are recorded too, so a shortcut
+  being asked for repeatedly, or a confirmation being answered without reaching
+  you, is visible after the fact. Shortcut *input* is deliberately never written.
+  These go to the helper's error output; where that is kept is decided by the app
+  you connect it to, and an app that discards it leaves no record at all. Claude
+  Desktop keeps it under `~/Library/Logs/Claude/`.
 
 ### Changed
 
@@ -39,9 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   jobs are stopped as the app shuts down, so a shortcut that changes something
   can't keep going unattended after you quit. (A force-quit can't be intercepted,
   so that case is still possible.)
-- **`run_shortcut` behaves exactly as before** — it waits for the shortcut to
-  finish, and so is still bound by the MCP client's roughly one-minute limit. Its
-  description now says so plainly and points at `run_shortcut_async` instead.
+- **`run_shortcut` returns the same result as before**, and still waits for the
+  shortcut to finish — so it remains bound by the MCP client's roughly one-minute
+  limit. Its description now says so plainly and points at `run_shortcut_async`.
+- **`run_shortcut` now shares the same queue as background runs.** One subtle
+  consequence: if four shortcuts are already running, a fifth waits its turn
+  instead of starting immediately, and if its time limit passes while it is still
+  waiting it reports a timeout — for a shortcut that never actually started. The
+  result says so, and **retrying is safe in that case**, including for a shortcut
+  that changes something. The upside is that no number of requests can now spawn
+  an unlimited number of shortcuts at once, and a synchronous run can be seen in
+  `list_shortcut_jobs` and stopped like any other.
+- **There is now a limit on how many shortcuts can be queued at once** (16 waiting
+  or running). Beyond that, further requests are refused until some finish. This
+  bounds what a single burst of requests can set in motion.
 
 ### Security
 
@@ -53,10 +74,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and never to set `confirm=true` unprompted. This server runs headless and
   cannot verify consent itself, so this wording is what the safety gate rests on.
 - **The server now sends MCP `instructions`** describing how its tools work
-  together — discovery order, which run tool to prefer, and the consent rule.
+  together — discovery order, which run tool to prefer, the consent rule, and an
+  instruction to treat whatever a shortcut returns as data rather than as commands.
   Clients that pass this to their assistant give it that guidance up front rather
   than leaving it to be discovered through refusals. Support varies by client, so
   every rule that matters is still stated in the individual tool descriptions too.
+- **A shortcut whose result has expired is no longer reported as an unknown job.**
+  Previously, asking about a job after its result was discarded produced "unknown
+  id — start a new run", which for a shortcut that had *already succeeded* was an
+  invitation to do it a second time. The server now remembers that the job ran and
+  says so, telling the assistant not to repeat it just to recover the output.
+- **The manual is franker about what the confirmation does and doesn't
+  guarantee** (§7). It previously said the app "requires your confirmation" for
+  `side_effect` shortcuts, which reads as a promise the software can't keep — it
+  runs headless and cannot show you a prompt, so it can only take the assistant's
+  word. The manual now says that plainly, explains that the allowlist is where you
+  actually grant permission, and notes that a shortcut which *reads* untrusted
+  content is a route into your assistant, not only a route out.
 
 ## [1.1.0] - 2026-07-26
 

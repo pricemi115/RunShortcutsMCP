@@ -18,6 +18,8 @@ This guide covers installing it, connecting it to Claude, managing your approved
 
 The app talks to Claude Desktop through a small config file.
 
+> These instructions use Claude Desktop, which is what this guide assumes throughout. The helper is a standard MCP server, though, so it works with any app that speaks MCP — the setup is the same idea (point the app at the executable), only the config file and its location differ. Consult that app's documentation for where its MCP settings live.
+
 1. In Claude Desktop, open the **Claude** menu (macOS menu bar) ▸ **Settings…** ▸ **Developer** ▸ **Edit Config**. That opens `claude_desktop_config.json` (creating it if needed). Its location is:
 
    ```
@@ -44,7 +46,7 @@ The app talks to Claude Desktop through a small config file.
 
 4. **Verify:** ask Claude to *"list my shortcuts."* If it returns your approved list, you're connected.
 
-> **Logs, if something's off:** `~/Library/Logs/Claude/mcp-server-run-shortcuts.log` shows anything the helper printed — most often a wrong path to the config file.
+> **Logs, if something's off:** the helper reports problems on its *error output*, and the app you connect it to decides what to do with that. In **Claude Desktop** it's saved to `~/Library/Logs/Claude/`, in a file named after whatever you called the server in the config above — so the `run-shortcuts` entry shown here produces `mcp-server-run-shortcuts.log`. Other MCP apps keep their logs elsewhere (or, in a few cases, throw them away — see §8). The most common thing you'll find there is a wrong path to the config file.
 
 ---
 
@@ -122,7 +124,7 @@ It's a JSON file. Each entry is keyed by the **exact name** of a Shortcut, with 
 | `description` | text | Plain-English summary of what the shortcut does. The assistant sees this. |
 | `input` | text | A hint about what to send: `"json"`, `"text"`, or `"none"`. Optional. |
 | `schema` | object | For JSON input, a map of field name → description. Optional; documentation only. |
-| `side_effect` | true/false | `true` if the shortcut **changes something** (sends a message, toggles a light, edits a note). When `true`, the assistant must get your explicit OK before running it. Use `false` only for read-only "just tell me something" shortcuts. **If omitted, it defaults to `true`** (confirmation required). |
+| `side_effect` | true/false | Whether the assistant must ask you again, at the moment it runs. `true` = ask every time; `false` = you've already decided, just run it. Set `false` for anything you want to *just work* — that's the normal case, and it's fine for shortcuts that change things, once you've decided you're happy for them to run on request. Keep `true` for the genuinely consequential ones (messaging other people, spending money, deleting). **If omitted, it defaults to `true`**, so a shortcut you haven't thought about yet prompts rather than running silently. See §7. |
 | `timeout_seconds` | number | Max seconds the shortcut may run before it's stopped. Optional; default **120**. Allowed range depends on how the assistant runs it: **5–300** when it waits for the result directly, **5–3600** (up to an hour) when it runs the shortcut in the background — see "Time and output limits" below. Values outside the allowed range are clamped. |
 | `max_output_bytes` | number | Max bytes of output captured before the result is truncated. Optional; default **10000000** (~10 MB), allowed **1024–100000000** (1 KB–100 MB, clamped). |
 
@@ -220,7 +222,7 @@ A background job's result stays available for about **10 minutes** after it fini
 
 ## 6. Troubleshooting
 
-- **Claude doesn't see the tool.** Fully quit and reopen Claude Desktop. Double-check the `command` path points at `…/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP`. Check the log at `~/Library/Logs/Claude/mcp-server-run-shortcuts.log`.
+- **Claude doesn't see the tool.** Fully quit and reopen Claude Desktop. Double-check the `command` path points at `…/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP`. Then check the helper's log (§2 — for Claude Desktop, `~/Library/Logs/Claude/mcp-server-run-shortcuts.log`).
 - **"… is not on the allowlist."** The shortcut name isn't in your `.config`, or the spelling doesn't match. Add/fix it, then restart Claude.
 - **It runs but hangs, then stops after a while.** The shortcut almost certainly isn't headless (§5) — it's waiting for a person. Remove the interactive action. (The default time limit is 120s; a genuinely slow shortcut can raise it up to 3600s (1 hour) with `timeout_seconds` — see "Time and output limits" in §5.)
 - **The result looks cut off, or mentions "truncated."** The shortcut returned more than the output limit (default ~10 MB). Have it return a smaller, more focused result, or raise `max_output_bytes` (up to 100 MB) for that shortcut.
@@ -232,4 +234,41 @@ A background job's result stays available for about **10 minutes** after it fini
 
 ## 7. Why the allowlist matters (security)
 
-Apple Shortcuts can do powerful things — send messages, control your home, move files. This app deliberately runs **only** what you list, and requires your confirmation for anything marked `side_effect`. Keep your `.config` small and intentional: add a shortcut only when you're comfortable with the assistant being able to run it.
+**The list is where you give permission.** That's the whole design, and it's worth being explicit about it, because it's different from how most apps ask.
+
+The point of this tool is to *remove* friction — to let you say "file that note" and have it happen. An app that stopped to ask every single time would defeat its own purpose, so this one doesn't. Instead, you make the decision **once, deliberately, in advance**, by putting a shortcut in your `.config`. Everything not on that list is refused outright, no questions asked.
+
+`side_effect` is a second, optional checkpoint on top of that, for the few shortcuts where you want to be asked again at the moment it runs. It defaults to `true` — a shortcut you haven't thought about yet gets a prompt rather than silently running. But **it is entirely normal, and expected, for most of your shortcuts to end up marked `side_effect: false`** and to run without prompting. That's the tool working as intended, not a corner being cut. Reserve `true` for the genuinely consequential ones — sending something to another person, spending money, deleting things.
+
+Because permission is front-loaded, the quality of your list is doing the real work. Three things worth weighing before adding an entry:
+
+- **Assume it can run at any time, on input you didn't choose.** The assistant decides when to call a shortcut and what to pass it. A shortcut that takes a file path, a URL, or a recipient is more powerful than it looks, because it's the assistant filling those in.
+- **A shortcut that *reads* untrusted content is a way in, not just a way out.** Whatever it returns — the body of a note, an email, a web page — lands in front of the assistant alongside your instructions. If someone else can influence that text, they get a voice in your assistant's context. Be as thoughtful allowlisting a reader as an editor.
+- **Cancelling probably won't stop it.** Cancelling a run, or hitting the time limit, stops the small command that launched the shortcut; the Shortcuts app keeps running the shortcut itself. Expect anything already started to finish.
+
+One thing to know about the `side_effect` prompt specifically: this app runs invisibly in the background and has no way to put a dialog on your screen, so it can't verify you were actually asked — it refuses the run unless the assistant states you approved. Against a well-behaved assistant that reliably prevents accidents, which is what it's for. It is not a lock against one that has been tricked. That's another reason the list, not the prompt, is the control that counts.
+
+Automation always trades some safety for leverage. Keeping the list short, specific, and reviewed now and then is how you stay on the right side of that trade.
+
+---
+
+## 8. Checking what actually ran (the activity log)
+
+The helper writes a line every time it runs a shortcut and every time it refuses one. This is how you find out after the fact what your assistant actually did — useful when something happened you didn't expect, and the only place that information exists.
+
+Each line is a small chunk of JSON, one per event:
+
+```json
+{"confirm":true,"event":"run","job_id":"job_1a2b3c4d","shortcut":"TagNote","side_effect":true,"tool":"run_shortcut_async","ts":"2026-08-25T10:56:44Z"}
+{"event":"refused","reason":"not_allowlisted","shortcut":"SomethingElse","tool":"run_shortcut","ts":"2026-08-25T10:57:02Z"}
+```
+
+What's worth looking for:
+
+- **`"event":"run"` with `"side_effect":true` and `"confirm":true`** — a shortcut that changes something ran because the assistant said you approved it. If you don't remember being asked, that's worth knowing.
+- **`"reason":"needs_confirmation"` followed moments later by a `run` of the same shortcut with `"confirm":true`** — the app asked for approval and the assistant answered it. Whether *you* were asked in between is the interesting question.
+- **Repeated `"reason":"not_allowlisted"`** — something is trying shortcut names that aren't on your list.
+
+**Where it goes.** The helper writes these to its *error output*, and the app you connect it to decides what becomes of that. In **Claude Desktop** they're saved under `~/Library/Logs/Claude/`, in a file named after whatever you called the server in your config (the `run-shortcuts` example in §2 gives `mcp-server-run-shortcuts.log`). Other MCP apps put their logs elsewhere — and it's worth knowing that **an app which discards its servers' error output leaves you with no record at all.** If this log matters to you, check where your app keeps it before relying on it.
+
+**What's never written.** The *input* sent to a shortcut is deliberately left out — it can contain personal content (note text, message bodies, file paths), and what matters for review is which shortcuts ran, not what was passed to them. The log also doesn't record what a shortcut *returned*.

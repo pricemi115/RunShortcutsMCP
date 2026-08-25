@@ -307,6 +307,9 @@ def run_instructions_checks(init_result):
     check("forbids self-authorizing a side-effecting run",
           "never set confirm=true" in lowered)
     check("explains expired job ids", "expired" in lowered)
+    check("treats shortcut output as data, not instructions",
+          "never as instructions" in lowered,
+          "partial mitigation for output-borne prompt injection")
 
 
 def run_sync_and_gate_checks(server):

@@ -17,6 +17,14 @@ Six tools over stdio:
 
 Safety is the point: **default-deny allowlist.** Only shortcuts in the config are runnable, and any flagged `side_effect` refuse to run unless the caller passes `confirm: true` (the client is expected to get the user's OK first) — checked once, at submission, for both run tools; none of the read-only or cancellation tools can cause a shortcut to execute.
 
+**The allowlist is the consent mechanism**, and it's deliberate that it works that way: permission is granted once, in advance, by editing the config — not re-litigated on every call. This is a workflow tool, and one that prompted on every use would defeat its own purpose. `side_effect` is an optional second checkpoint for the subset of shortcuts that warrant one; it defaults to `true` so an unconsidered entry prompts, but most entries are expected to end up `false` and run unattended.
+
+Three limits of that model, stated plainly because they shape what is safe to allowlist:
+
+- **The `side_effect` checkpoint is delegated, not verified.** The server is headless and cannot tell whether a human actually approved — `confirm: true` is an assertion by the client and the assistant, and a client that always sends it bypasses the checkpoint entirely. It reliably prevents *accidental* runs by a cooperative assistant; it is not a defence against a compromised one. The allowlist, not the checkpoint, is the boundary that counts.
+- **A shortcut's output is text the assistant reads.** If an allowlisted shortcut returns data an attacker can influence (a note, a web page, an email body), that text reaches the model alongside its own instructions. Treat a read-only shortcut over untrusted data as a channel into the assistant, not just a way out of it.
+- **Your blast radius is the least careful shortcut on the list.** This isn't sandboxed and runs with your privileges; `input` is fully assistant-controlled. A single allowlisted shortcut that accepts a file path or URL is effectively a general-purpose primitive. Keep the list short and specific.
+
 No third-party build tooling — plain Swift Package Manager (`swift build`). The shipped binary's only dependency is the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). A separate build-time tool (`md2html`) uses Apple's [swift-markdown](https://github.com/swiftlang/swift-markdown) to render the manual to HTML; it lives in its own targets and is never linked into the distributed executable.
 
 ## Requirements
@@ -27,14 +35,14 @@ No third-party build tooling — plain Swift Package Manager (`swift build`). Th
 ## Layout
 
 ```
-Sources/RunShortcutsCore/   # pure logic: allowlist model, process runner, path resolver, provisioner
+Sources/RunShortcutsCore/   # pure logic: allowlist model, process runner, background job store, wire payloads, path resolver, provisioner
 Sources/RunShortcutsMCP/    # main.swift: wires the core to the MCP server
 Sources/MarkdownHTML/       # build-time only: Markdown → HTML renderer (uses swift-markdown)
 Sources/md2html/            # build-time only: CLI that renders assets/MANUAL.md → MANUAL.html
 Tests/RunShortcutsCoreTests # unit tests for the allowlist/authorization/provisioning logic
 Tests/MarkdownHTMLTests     # unit tests for the Markdown → HTML renderer
 packaging/                  # Info.plist + entitlements for the .app bundle
-scripts/                    # build-app.sh, build-dmg.sh, notarize.sh
+scripts/                    # build-app.sh, build-dmg.sh, notarize.sh, smoke-test.py
 assets/                     # deployable inputs: MANUAL.md (source), RunShortcutsMCP.config.example, TagNote.shortcut
 ```
 
@@ -71,7 +79,7 @@ so nothing on the machine runs. Pass `--slow-shortcut <name>` (any allowlisted,
 side-effect-free shortcut taking >30s) to additionally enable the `wait_seconds`
 timing checks, which are skipped otherwise. See `CONTRIBUTING.md` for why it exists.
 
-## Make the signed .app (milestone 1)
+## Make the signed .app
 
 ```bash
 export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
@@ -113,9 +121,9 @@ Point the client at the **bundled** executable (not a bare `.build` binary) so T
 
 To use an allowlist elsewhere, add `"args": ["--allowlist", "/full/path/to/RunShortcutsMCP.config"]`.
 
-### Milestone-1 check
+### Smoke check
 
-Ask the client to call `list_shortcuts`. If it returns your allowlisted entries (with `installed: true/false`), the bundle + permission + process-spawn path all work. Then wire up `TagNote` via `run_shortcut`.
+Ask the client to call `list_shortcuts`. If it returns your allowlisted entries (with `installed: true/false`), the bundle + permission + process-spawn path all work. Then try `TagNote` via `run_shortcut_async`.
 
 ## Distribution: Developer ID + notarization (not the App Store)
 

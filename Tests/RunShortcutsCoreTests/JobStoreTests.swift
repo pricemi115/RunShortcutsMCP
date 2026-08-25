@@ -72,8 +72,8 @@ final class JobStoreTests: XCTestCase {
     // MARK: - Happy path and terminal states
 
     func testHappyPathReachesSucceeded() async throws {
-        let store = JobStore(execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") })
-        let submitted = await store.submit(shortcutName: "Test", input: nil)
+        let store = JobStore(execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") })
+        let submitted = try await store.submit(shortcutName: "Test", input: nil)
         let waited = await store.wait(for: submitted.id, timeout: 2)
         let job = try XCTUnwrap(waited)
         XCTAssertEqual(job.state, .succeeded)
@@ -81,8 +81,8 @@ final class JobStoreTests: XCTestCase {
     }
 
     func testNonZeroExitReachesFailed() async throws {
-        let store = JobStore(execute: { _, _ in ShortcutResult(exitCode: 1, stdout: "", stderr: "boom") })
-        let submitted = await store.submit(shortcutName: "Test", input: nil)
+        let store = JobStore(execute: { _, _, _ in ShortcutResult(exitCode: 1, stdout: "", stderr: "boom") })
+        let submitted = try await store.submit(shortcutName: "Test", input: nil)
         let waited = await store.wait(for: submitted.id, timeout: 2)
         let job = try XCTUnwrap(waited)
         XCTAssertEqual(job.state, .failed)
@@ -93,24 +93,24 @@ final class JobStoreTests: XCTestCase {
     /// without crashing the job's task, and must release its concurrency slot —
     /// verified by confirming a second job can still run to completion.
     func testLaunchErrorReachesFailedAndReleasesSlot() async throws {
-        let store = JobStore(execute: { _, _ in throw LaunchError() }, maxConcurrent: 1)
-        let first = await store.submit(shortcutName: "Bad", input: nil)
+        let store = JobStore(execute: { _, _, _ in throw LaunchError() }, maxConcurrent: 1)
+        let first = try await store.submit(shortcutName: "Bad", input: nil)
         let firstWaited = await store.wait(for: first.id, timeout: 2)
         let firstJob = try XCTUnwrap(firstWaited)
         XCTAssertEqual(firstJob.state, .failed)
         XCTAssertNotNil(firstJob.failureMessage)
 
-        let second = await store.submit(shortcutName: "Bad", input: nil)
+        let second = try await store.submit(shortcutName: "Bad", input: nil)
         let secondWaited = await store.wait(for: second.id, timeout: 2)
         let secondJob = try XCTUnwrap(secondWaited)
         XCTAssertEqual(secondJob.state, .failed)
     }
 
     func testTimedOutResultReachesTimedOutState() async throws {
-        let store = JobStore(execute: { _, _ in
+        let store = JobStore(execute: { _, _, _ in
             ShortcutResult(exitCode: -1, stdout: "", stderr: "timed out", timedOut: true)
         })
-        let submitted = await store.submit(shortcutName: "Slow", input: nil)
+        let submitted = try await store.submit(shortcutName: "Slow", input: nil)
         let waited = await store.wait(for: submitted.id, timeout: 2)
         let job = try XCTUnwrap(waited)
         XCTAssertEqual(job.state, .timedOut)
@@ -121,12 +121,12 @@ final class JobStoreTests: XCTestCase {
     func testTTLReapingUnderInjectedClock() async throws {
         let clock = TestClock()
         let store = JobStore(
-            execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") },
+            execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") },
             retention: 600,
             now: { clock.now() },
             uptime: { clock.uptime() }
         )
-        let submitted = await store.submit(shortcutName: "Test", input: nil)
+        let submitted = try await store.submit(shortcutName: "Test", input: nil)
         _ = await store.wait(for: submitted.id, timeout: 2)
         let stillThere = await store.job(id: submitted.id)
         XCTAssertNotNil(stillThere)
@@ -139,14 +139,14 @@ final class JobStoreTests: XCTestCase {
     func testRetainedBytesEvictionKeepsNewest() async throws {
         let bigOutput = String(repeating: "x", count: 40_000)
         let store = JobStore(
-            execute: { _, _ in ShortcutResult(exitCode: 0, stdout: bigOutput, stderr: "") },
+            execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: bigOutput, stderr: "") },
             maxConcurrent: 10,
             maxJobs: 100,
             maxRetainedBytes: 100_000
         )
         var ids: [String] = []
         for i in 0..<5 {
-            let job = await store.submit(shortcutName: "Job\(i)", input: nil)
+            let job = try await store.submit(shortcutName: "Job\(i)", input: nil)
             _ = await store.wait(for: job.id, timeout: 2)
             ids.append(job.id)
         }
@@ -165,13 +165,13 @@ final class JobStoreTests: XCTestCase {
 
     func testCountCapEvictsOldestFirst() async throws {
         let store = JobStore(
-            execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "", stderr: "") },
+            execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "", stderr: "") },
             maxConcurrent: 10,
             maxJobs: 5
         )
         var ids: [String] = []
         for i in 0..<40 {
-            ids.append(await store.submit(shortcutName: "Job\(i)", input: nil).id)
+            ids.append(try await store.submit(shortcutName: "Job\(i)", input: nil).id)
         }
         for id in ids {
             _ = await store.wait(for: id, timeout: 2)
@@ -188,7 +188,7 @@ final class JobStoreTests: XCTestCase {
         // so they actually reach a terminal state and give the eviction rules
         // something to act on while "Long" is still running.
         let store = JobStore(
-            execute: { name, _ in
+            execute: { name, _, _ in
                 if name == "Long" {
                     while await !gate.isReleased() {
                         try? await Task.sleep(for: .milliseconds(20))
@@ -199,13 +199,13 @@ final class JobStoreTests: XCTestCase {
             maxConcurrent: 10,
             maxJobs: 3
         )
-        let longRunning = await store.submit(shortcutName: "Long", input: nil)
+        let longRunning = try await store.submit(shortcutName: "Long", input: nil)
         while await store.job(id: longRunning.id)?.state != .running {
             try? await Task.sleep(for: .milliseconds(10))
         }
 
         for i in 0..<10 {
-            let job = await store.submit(shortcutName: "Short\(i)", input: nil)
+            let job = try await store.submit(shortcutName: "Short\(i)", input: nil)
             _ = await store.wait(for: job.id, timeout: 2)
         }
 
@@ -221,12 +221,85 @@ final class JobStoreTests: XCTestCase {
         _ = await store.wait(for: longRunning.id, timeout: 2)
     }
 
+    // MARK: - Admission control and retirement
+
+    /// Submission must be refused once `maxPending` jobs are queued or running.
+    /// Without this, one authorisation can enqueue an unbounded number of
+    /// side-effecting runs that keep firing long after anyone is watching.
+    func testSubmitRefusesPastPendingCap() async throws {
+        let gate = Gate()
+        let store = JobStore(
+            execute: { _, _, _ in
+                while await !gate.isReleased() {
+                    try? await Task.sleep(for: .milliseconds(10))
+                }
+                return ShortcutResult(exitCode: 0, stdout: "", stderr: "")
+            },
+            maxConcurrent: 2,
+            maxPending: 3
+        )
+        for i in 0..<3 {
+            _ = try await store.submit(shortcutName: "Job\(i)", input: nil)
+        }
+
+        do {
+            _ = try await store.submit(shortcutName: "OneTooMany", input: nil)
+            XCTFail("expected the fourth submission to be refused")
+        } catch JobStoreError.queueFull(let limit) {
+            XCTAssertEqual(limit, 3)
+        }
+
+        await gate.release()
+    }
+
+    /// A retired job must still be identifiable as having run. Reporting it as an
+    /// unknown id would invite re-running a shortcut that already succeeded.
+    func testRetiredJobIsRememberedAsHavingRun() async throws {
+        let clock = TestClock()
+        let store = JobStore(
+            execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "done", stderr: "") },
+            retention: 600,
+            now: { clock.now() },
+            uptime: { clock.uptime() }
+        )
+        let job = try await store.submit(shortcutName: "Report", input: nil)
+        _ = await store.wait(for: job.id, timeout: 2)
+
+        clock.advance(by: 601)
+        let retired = await store.job(id: job.id)
+        XCTAssertNil(retired, "the record itself should be gone")
+
+        let remembered = await store.expiredJob(id: job.id)
+        XCTAssertEqual(remembered?.shortcutName, "Report")
+        XCTAssertEqual(remembered?.state, .succeeded)
+
+        let neverIssued = await store.expiredJob(id: "job_deadbeef")
+        XCTAssertNil(neverIssued, "an id never issued must not be reported as having run")
+    }
+
+    /// A single job may hold more output than the entire retention budget, since
+    /// the per-stream cap exceeds it. It must still be readable at least once
+    /// rather than being evicted on the very next reap.
+    func testNewestTerminalJobSurvivesByteBudget() async throws {
+        let huge = String(repeating: "x", count: 200_000)
+        let store = JobStore(
+            execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: huge, stderr: "") },
+            maxRetainedBytes: 50_000
+        )
+        let job = try await store.submit(shortcutName: "Big", input: nil)
+        _ = await store.wait(for: job.id, timeout: 2)
+
+        let readable = await store.job(id: job.id)
+        XCTAssertNotNil(readable, "a job larger than the whole budget must survive to be read once")
+        XCTAssertEqual(readable?.result?.stdout.count, 200_000)
+    }
+
     // MARK: - Concurrency
 
     func testConcurrencyCapIsRespected() async throws {
         let probe = ConcurrencyProbe()
         let store = JobStore(
-            execute: { _, _ in
+            execute: { _, _, _ in
                 await probe.enter()
                 try? await Task.sleep(for: .milliseconds(200))
                 await probe.exit()
@@ -236,7 +309,7 @@ final class JobStoreTests: XCTestCase {
         )
         var ids: [String] = []
         for i in 0..<4 {
-            ids.append(await store.submit(shortcutName: "Job\(i)", input: nil).id)
+            ids.append(try await store.submit(shortcutName: "Job\(i)", input: nil).id)
         }
         for id in ids {
             let waited = await store.wait(for: id, timeout: 3)
@@ -251,7 +324,7 @@ final class JobStoreTests: XCTestCase {
 
     func testCancelWhileRunningObservesTaskCancellation() async throws {
         let observed = Gate()
-        let store = JobStore(execute: { _, _ in
+        let store = JobStore(execute: { _, _, _ in
             for _ in 0..<100 {
                 if Task.isCancelled {
                     await observed.release()
@@ -261,7 +334,7 @@ final class JobStoreTests: XCTestCase {
             }
             return ShortcutResult(exitCode: 0, stdout: "finished", stderr: "")
         })
-        let job = await store.submit(shortcutName: "Long", input: nil)
+        let job = try await store.submit(shortcutName: "Long", input: nil)
         while await store.job(id: job.id)?.state != .running {
             try? await Task.sleep(for: .milliseconds(10))
         }
@@ -280,7 +353,7 @@ final class JobStoreTests: XCTestCase {
     func testCancelWhileQueuedReleasesSlot() async throws {
         let gate = Gate()
         let store = JobStore(
-            execute: { _, _ in
+            execute: { _, _, _ in
                 while await !gate.isReleased() {
                     try? await Task.sleep(for: .milliseconds(10))
                 }
@@ -288,12 +361,12 @@ final class JobStoreTests: XCTestCase {
             },
             maxConcurrent: 1
         )
-        let running = await store.submit(shortcutName: "Running", input: nil)
+        let running = try await store.submit(shortcutName: "Running", input: nil)
         while await store.job(id: running.id)?.state != .running {
             try? await Task.sleep(for: .milliseconds(10))
         }
 
-        let queued = await store.submit(shortcutName: "Queued", input: nil)
+        let queued = try await store.submit(shortcutName: "Queued", input: nil)
         let queuedState = await store.job(id: queued.id)?.state
         XCTAssertEqual(queuedState, .queued)
         // Give the background task a moment to actually reach acquireSlot() and
@@ -310,7 +383,7 @@ final class JobStoreTests: XCTestCase {
         _ = await store.wait(for: running.id, timeout: 2)
 
         // If the queued job's slot had leaked, this would never leave .queued.
-        let third = await store.submit(shortcutName: "Third", input: nil)
+        let third = try await store.submit(shortcutName: "Third", input: nil)
         let thirdWaited = await store.wait(for: third.id, timeout: 2)
         let thirdJob = try XCTUnwrap(thirdWaited)
         XCTAssertEqual(thirdJob.state, .succeeded)
@@ -322,11 +395,11 @@ final class JobStoreTests: XCTestCase {
     /// actor-isolated, that spin holds the actor and starves every other job
     /// operation until the deadline (up to 50s in production).
     func testWaitReturnsPromptlyWhenCallerCancelled() async throws {
-        let store = JobStore(execute: { _, _ in
+        let store = JobStore(execute: { _, _, _ in
             try? await Task.sleep(for: .seconds(30))
             return ShortcutResult(exitCode: 0, stdout: "", stderr: "")
         })
-        let job = await store.submit(shortcutName: "Slow", input: nil)
+        let job = try await store.submit(shortcutName: "Slow", input: nil)
         let waiter = Task { await store.wait(for: job.id, timeout: 30) }
         try? await Task.sleep(for: .milliseconds(200))
 
@@ -340,11 +413,11 @@ final class JobStoreTests: XCTestCase {
     /// A cancelled `wait` must not block other work on the actor — a concurrent
     /// operation has to stay responsive while the cancelled waiter unwinds.
     func testCancelledWaitDoesNotStarveTheActor() async throws {
-        let store = JobStore(execute: { _, _ in
+        let store = JobStore(execute: { _, _, _ in
             try? await Task.sleep(for: .seconds(30))
             return ShortcutResult(exitCode: 0, stdout: "", stderr: "")
         })
-        let job = await store.submit(shortcutName: "Slow", input: nil)
+        let job = try await store.submit(shortcutName: "Slow", input: nil)
         let waiter = Task { await store.wait(for: job.id, timeout: 30) }
         try? await Task.sleep(for: .milliseconds(200))
         waiter.cancel()
@@ -359,7 +432,7 @@ final class JobStoreTests: XCTestCase {
     /// `cancelAll` must stop every non-terminal job — this is what the server's
     /// shutdown path relies on to avoid orphaning a side-effecting shortcut.
     func testCancelAllStopsEveryLiveJob() async throws {
-        let store = JobStore(execute: { _, _ in
+        let store = JobStore(execute: { _, _, _ in
             for _ in 0..<200 {
                 if Task.isCancelled { return ShortcutResult(exitCode: -15, stdout: "", stderr: "killed") }
                 try? await Task.sleep(for: .milliseconds(20))
@@ -369,7 +442,7 @@ final class JobStoreTests: XCTestCase {
 
         var ids: [String] = []
         for i in 0..<4 {
-            ids.append(await store.submit(shortcutName: "Job\(i)", input: nil).id)
+            ids.append(try await store.submit(shortcutName: "Job\(i)", input: nil).id)
         }
         // Let the first two reach .running and the rest queue behind them.
         try? await Task.sleep(for: .milliseconds(100))
@@ -392,7 +465,7 @@ final class JobStoreTests: XCTestCase {
         let clock = TestClock()
         let gate = Gate()
         let store = JobStore(
-            execute: { name, _ in
+            execute: { name, _, _ in
                 if name == "Wedged" {
                     // Swallows cancellation, standing in for a child stuck in
                     // uninterruptible sleep that never closes its pipes. Bounded
@@ -410,7 +483,7 @@ final class JobStoreTests: XCTestCase {
             uptime: { clock.uptime() }
         )
 
-        let wedged = await store.submit(shortcutName: "Wedged", input: nil)
+        let wedged = try await store.submit(shortcutName: "Wedged", input: nil)
         while await store.job(id: wedged.id)?.state != .running {
             try? await Task.sleep(for: .milliseconds(10))
         }
@@ -424,7 +497,7 @@ final class JobStoreTests: XCTestCase {
         XCTAssertNotNil(abandoned.failureMessage)
 
         // With maxConcurrent 1, this could never run if the slot had leaked.
-        let next = await store.submit(shortcutName: "Next", input: nil)
+        let next = try await store.submit(shortcutName: "Next", input: nil)
         let waited = await store.wait(for: next.id, timeout: 3)
         XCTAssertEqual(try XCTUnwrap(waited).state, .succeeded)
 
@@ -436,7 +509,7 @@ final class JobStoreTests: XCTestCase {
         XCTAssertEqual(stillAbandoned.state, .cancelled, "a late result must not resurrect an abandoned job")
 
         // A double release would have corrupted the permit count; prove it didn't.
-        let after = await store.submit(shortcutName: "After", input: nil)
+        let after = try await store.submit(shortcutName: "After", input: nil)
         let afterWaited = await store.wait(for: after.id, timeout: 3)
         XCTAssertEqual(try XCTUnwrap(afterWaited).state, .succeeded)
     }
@@ -446,7 +519,7 @@ final class JobStoreTests: XCTestCase {
     func testWatchdogCancelsAbandonedRunningJob() async throws {
         let clock = TestClock()
         let store = JobStore(
-            execute: { _, _ in
+            execute: { _, _, _ in
                 for _ in 0..<200 {
                     if Task.isCancelled {
                         return ShortcutResult(exitCode: -15, stdout: "", stderr: "killed")
@@ -459,7 +532,7 @@ final class JobStoreTests: XCTestCase {
             now: { clock.now() },
             uptime: { clock.uptime() }
         )
-        let job = await store.submit(shortcutName: "Stuck", input: nil)
+        let job = try await store.submit(shortcutName: "Stuck", input: nil)
         while await store.job(id: job.id)?.state != .running {
             try? await Task.sleep(for: .milliseconds(10))
         }
@@ -481,7 +554,7 @@ final class JobStoreTests: XCTestCase {
         let clock = TestClock()
         let gate = Gate()
         let store = JobStore(
-            execute: { _, _ in
+            execute: { _, _, _ in
                 for _ in 0..<500 {
                     if await gate.isReleased() { break }
                     try? await Task.sleep(for: .milliseconds(20))
@@ -492,7 +565,7 @@ final class JobStoreTests: XCTestCase {
             now: { clock.now() },
             uptime: { clock.uptime() }
         )
-        let job = await store.submit(shortcutName: "Long", input: nil)
+        let job = try await store.submit(shortcutName: "Long", input: nil)
         while await store.job(id: job.id)?.state != .running {
             try? await Task.sleep(for: .milliseconds(10))
         }
@@ -512,12 +585,12 @@ final class JobStoreTests: XCTestCase {
     func testForwardWallClockStepDoesNotExpireResults() async throws {
         let clock = TestClock()
         let store = JobStore(
-            execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") },
+            execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") },
             retention: 600,
             now: { clock.now() },
             uptime: { clock.uptime() }
         )
-        let job = await store.submit(shortcutName: "Test", input: nil)
+        let job = try await store.submit(shortcutName: "Test", input: nil)
         _ = await store.wait(for: job.id, timeout: 2)
 
         clock.stepWallClock(by: 86_400)
@@ -539,14 +612,14 @@ final class JobStoreTests: XCTestCase {
     func testBackwardWallClockStepDoesNotExtendWait() async throws {
         let clock = TestClock()
         let store = JobStore(
-            execute: { _, _ in
+            execute: { _, _, _ in
                 try? await Task.sleep(for: .seconds(5))
                 return ShortcutResult(exitCode: 0, stdout: "", stderr: "")
             },
             now: { clock.now() }
             // uptime deliberately left as the real monotonic default
         )
-        let job = await store.submit(shortcutName: "Slow", input: nil)
+        let job = try await store.submit(shortcutName: "Slow", input: nil)
         clock.stepWallClock(by: -3600)
 
         let start = Date()
@@ -560,33 +633,33 @@ final class JobStoreTests: XCTestCase {
     // MARK: - Lookup semantics
 
     func testWaitReturnsTerminalJobWithinBudget() async throws {
-        let store = JobStore(execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "done", stderr: "") })
-        let job = await store.submit(shortcutName: "Fast", input: nil)
+        let store = JobStore(execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "done", stderr: "") })
+        let job = try await store.submit(shortcutName: "Fast", input: nil)
         let waited = await store.wait(for: job.id, timeout: 2)
         let result = try XCTUnwrap(waited)
         XCTAssertEqual(result.state, .succeeded)
     }
 
     func testWaitReturnsNonTerminalJobWhenBudgetExpires() async throws {
-        let store = JobStore(execute: { _, _ in
+        let store = JobStore(execute: { _, _, _ in
             try? await Task.sleep(for: .seconds(5))
             return ShortcutResult(exitCode: 0, stdout: "", stderr: "")
         })
-        let job = await store.submit(shortcutName: "Slow", input: nil)
+        let job = try await store.submit(shortcutName: "Slow", input: nil)
         let waited = await store.wait(for: job.id, timeout: 0.3)
         let result = try XCTUnwrap(waited)
         XCTAssertFalse(result.state.isTerminal)
     }
 
     func testUnknownIDReturnsNil() async throws {
-        let store = JobStore(execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "", stderr: "") })
+        let store = JobStore(execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "", stderr: "") })
         let job = await store.job(id: "job_deadbeef")
         XCTAssertNil(job)
     }
 
     func testTerminalJobStaysReadableAcrossRepeatedReads() async throws {
-        let store = JobStore(execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") })
-        let job = await store.submit(shortcutName: "Test", input: nil)
+        let store = JobStore(execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "ok", stderr: "") })
+        let job = try await store.submit(shortcutName: "Test", input: nil)
         _ = await store.wait(for: job.id, timeout: 2)
         let first = await store.job(id: job.id)
         let second = await store.job(id: job.id)
@@ -596,7 +669,7 @@ final class JobStoreTests: XCTestCase {
 
     func testJobIDsAreUniqueAndWellFormed() async throws {
         let store = JobStore(
-            execute: { _, _ in ShortcutResult(exitCode: 0, stdout: "", stderr: "") },
+            execute: { _, _, _ in ShortcutResult(exitCode: 0, stdout: "", stderr: "") },
             maxConcurrent: 50,
             maxJobs: 2000,
             retention: 3600
@@ -604,7 +677,7 @@ final class JobStoreTests: XCTestCase {
         let pattern = try NSRegularExpression(pattern: "^job_[0-9a-f]{8}$")
         var ids = Set<String>()
         for i in 0..<1000 {
-            let job = await store.submit(shortcutName: "Job\(i)", input: nil)
+            let job = try await store.submit(shortcutName: "Job\(i)", input: nil)
             let range = NSRange(job.id.startIndex..<job.id.endIndex, in: job.id)
             XCTAssertNotNil(pattern.firstMatch(in: job.id, range: range))
             ids.insert(job.id)
@@ -617,10 +690,10 @@ final class JobStoreTests: XCTestCase {
     /// Exercises the store against a genuine subprocess via `ShortcutsRunner`'s
     /// own `/bin/sleep` test seam, end to end.
     func testRealSubprocessIntegrationReachesTimedOut() async throws {
-        let store = JobStore(execute: { _, input in
+        let store = JobStore(execute: { _, input, _ in
             try await ShortcutsRunner(executable: "/bin/sleep", timeout: 0.5).invoke(arguments: ["5"], input: input)
         })
-        let job = await store.submit(shortcutName: "sleep-via-execute-closure", input: nil)
+        let job = try await store.submit(shortcutName: "sleep-via-execute-closure", input: nil)
         let waited = await store.wait(for: job.id, timeout: 3)
         let finished = try XCTUnwrap(waited)
         XCTAssertEqual(finished.state, .timedOut)
