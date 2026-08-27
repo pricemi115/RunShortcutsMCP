@@ -43,7 +43,7 @@ Tests/RunShortcutsCoreTests # unit tests for the allowlist/authorization/provisi
 Tests/MarkdownHTMLTests     # unit tests for the Markdown → HTML renderer
 packaging/                  # Info.plist + entitlements for the .app bundle
 scripts/                    # build-app.sh, build-dmg.sh, notarize.sh, smoke-test.py
-assets/                     # deployable inputs: MANUAL.md (source), RunShortcutsMCP.config.example, TagNote.shortcut
+assets/                     # deployable inputs: MANUAL.md (source), RunShortcutsMCP.config.example, 11 example .shortcut files (1 is an internal helper, not directly callable)
 ```
 
 The manual is authored in `assets/MANUAL.md` (the maintainable source) and rendered to `MANUAL.html` at build time so end users can open it in any browser without a Markdown viewer.
@@ -103,7 +103,7 @@ The server resolves its allowlist path in this order:
 
 If none of these resolve, the server **fails closed** — it refuses to start rather than falling back to an `allowlist.json` in the current working directory.
 
-The deployable inputs live in `assets/` (`MANUAL.md`, `RunShortcutsMCP.config.example`, `TagNote.shortcut`); the build scripts render the manual to `MANUAL.html` and bundle everything into the app and the installer. See `assets/MANUAL.md` for the end-user walkthrough.
+The deployable inputs live in `assets/` (`MANUAL.md`, `RunShortcutsMCP.config.example`, and eleven example `.shortcut` files covering Apple Notes, Apple Reminders, and Shortcuts-library housekeeping — ten directly callable, plus `GetSubTask`, a private helper `TagReminder`/`GetReminderTags` depend on internally); the build scripts render the manual to `MANUAL.html` and bundle everything into the app and the installer. See `assets/MANUAL.md` for the end-user walkthrough, including what each example shortcut does.
 
 ## Register with the MCP client
 
@@ -221,9 +221,9 @@ export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 ./scripts/build-dmg.sh             # → build/RunShortcutsMCP.dmg (signed + notarized)
 ```
 
-The DMG is signed with the same **Developer ID Application** cert as the app (no separate installer certificate) and notarized/stapled using the same credentials as `notarize.sh`. The disk image shows the app and a drag-to-`/Applications` shortcut at the top level, with the manual (`MANUAL.html`), a reference config, and the example **`TagNote.shortcut`** tucked into a `Resources/` folder.
+The DMG is signed with the same **Developer ID Application** cert as the app (no separate installer certificate) and notarized/stapled using the same credentials as `notarize.sh`. The disk image shows the app and a drag-to-`/Applications` shortcut at the top level, with the manual (`MANUAL.html`), a reference config, and the eleven example `.shortcut` files tucked into a `Resources/` folder.
 
-**First-run provisioning.** Users don't set up the config by hand. The first time the app runs (when the MCP client first launches it), it creates `~/Library/Application Support/<bundle-id>/`, seeds an empty (default-deny) `RunShortcutsMCP.config`, and drops `MANUAL.html`, `RunShortcutsMCP.config.example`, and `TagNote.shortcut` beside it for reference. The user just edits the config.
+**First-run provisioning.** Users don't set up the config by hand. The first time the app runs (when the MCP client first launches it), it creates `~/Library/Application Support/<bundle-id>/`, seeds an empty (default-deny) `RunShortcutsMCP.config`, and drops `MANUAL.html`, `RunShortcutsMCP.config.example`, and all eleven example `.shortcut` files beside it for reference. The user just edits the config.
 
 ## License
 

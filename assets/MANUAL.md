@@ -65,7 +65,7 @@ The assistant can run a shortcut **only if it appears in your list**. Anything n
 
   This is a per-user location — your own list, editable without admin rights, and it works no matter where the app itself lives (including a shared `/Applications`). The app discovers it automatically; there's nothing to configure.
 
-  **You don't have to create any of this by hand.** The first time the app runs (when Claude first calls it), it creates this folder, seeds an empty `RunShortcutsMCP.config`, and drops a browser-viewable copy of this manual (`MANUAL.html`), a reference `RunShortcutsMCP.config.example`, and the ready-to-install **`TagNote.shortcut`** right beside it. Just open the config and add your shortcuts (see **Format**, below). To open the folder in Finder:
+  **You don't have to create any of this by hand.** The first time the app runs (when Claude first calls it), it creates this folder, seeds an empty `RunShortcutsMCP.config`, and drops a browser-viewable copy of this manual (`MANUAL.html`), a reference `RunShortcutsMCP.config.example`, and eleven ready-to-install example `.shortcut` files (see "The bundled example shortcuts," just below) right beside it. Just open the config and add your shortcuts (see **Format**, below). To open the folder in Finder:
 
   ```bash
   open ~/Library/Application\ Support/dev.grumptech.runshortcutsmcp
@@ -74,20 +74,49 @@ The assistant can run a shortcut **only if it appears in your list**. Anything n
 - *(Single-user convenience: a `RunShortcutsMCP.config` placed right next to `RunShortcutsMCP.app` also works, and is used only if the Application Support file above isn't present. Never put it **inside** `RunShortcutsMCP.app` — that breaks the app's signature.)*
 - *(Advanced: point `--allowlist` at any path in the Claude config args, as in §2.)*
 
-### The bundled example shortcut (TagNote)
+### The bundled example shortcuts
 
-The default install **includes a ready-to-use shortcut called `TagNote`** — it's the one the example config refers to, and it adds or removes a live tag on an Apple Note (send `"action": "add"` (the default) or `"remove"`). Apple's built-in **Find Notes** action only supports a "contains" match, not an exact one, so `TagNote` separately verifies the note it found matches the requested title exactly — if it doesn't, it returns a clear "not found" error instead of silently tagging the wrong note (or doing nothing).
+The default install **includes ten ready-to-use shortcuts**, covering Apple Notes, Apple Reminders, and Shortcuts-library housekeeping. They're the ones the example config refers to. An eleventh, `GetSubTask`, also comes along — it's a private helper that two of the reminder shortcuts call internally, not one you allowlist or run yourself (see the note under the Reminders table below).
 
-**Where to find it.** A signed `TagNote.shortcut` file ships in two places:
+If you also run **EventKitMCP** (GrumpTech's Calendar/Reminders MCP server) or the **`Read_and_Write_Apple_Notes`** connector, most of these exist specifically to fill gaps neither of those tools can reach on its own — Apple's underlying frameworks (EventKit for Reminders, the Notes AppleScript bridge) simply don't expose certain things through their public APIs: reminders have no tags field and no parent/subtask field at all, and a note's live tags aren't reliably visible through a plain content read. Each entry below says which gap it closes. If you don't use either of those, the notes-and-reminders shortcuts still work standalone; only `ShortcutBackup` has no connection to either.
+
+**Where to find them.** Signed `.shortcut` files ship in two places:
 
 - in the **`Resources`** folder inside the disk image you installed from (the window that opened when you double-clicked the download), and
-- in your config folder, where the app drops a copy on first run:
-  `~/Library/Application Support/dev.grumptech.runshortcutsmcp/TagNote.shortcut`
+- in your config folder, where the app drops a copy of each on first run:
+  `~/Library/Application Support/dev.grumptech.runshortcutsmcp/`
   (open that folder with the `open …` command above).
 
-**How to install it.** Double-click `TagNote.shortcut` in Finder (or drag it onto the Shortcuts app). The Shortcuts app opens and adds it to your library — that's the whole process. Once it's installed *and* listed in your `RunShortcutsMCP.config`, the assistant can run it.
+**How to install one.** Double-click its `.shortcut` file in Finder (or drag it onto the Shortcuts app). The Shortcuts app opens and adds it to your library — that's the whole process. Once it's installed *and* listed in your `RunShortcutsMCP.config`, the assistant can run it. To confirm, ask the assistant to *"list my shortcuts"* — each one you've installed should appear with `installed: true`.
 
-To confirm, ask the assistant to *"list my shortcuts"* — `TagNote` should appear with `installed: true`.
+#### Apple Notes
+
+| Shortcut | What it does | Fills this gap |
+|---|---|---|
+| **`TagNote`** | Adds or removes a live tag on a note (`{"tag", "note", "action"}`, `action` optional, defaults to `"add"`). Verifies the note it found matches the requested title *exactly* — Apple's built-in **Find Notes** action only supports "contains," so without this check a non-unique title could tag the wrong note. Returns a clear "not found" error instead of tagging silently. | The Notes connector can't create a real, filterable tag — writing `#tag` into a note's body via the connector leaves it as literal text, never parsed into a tag. |
+| **`GetNoteContents`** | Returns a note's true current content as Markdown, tags included (`{"note", "folder"}`). | A plain content read can miss a tag that was just added — this is the reliable way to verify a `TagNote` call actually landed. |
+| **`MoveNote`** | Moves a note between folders (`{"source", "destination", "auto_remove"}`). `destination` is the exact title of a **placeholder note already sitting in the target folder** — the shortcut moves `source` there and, if `auto_remove` is true, deletes the placeholder afterward. Always use a *freshly created* placeholder; one that's sat untouched can report a stale folder. | Neither connector can move or delete a note at all. |
+
+#### Apple Reminders
+
+| Shortcut | What it does | Fills this gap |
+|---|---|---|
+| **`TagReminder`** | Adds or removes a live tag on a reminder, root or subtask (`{"reminder", "tag", "action"}`). On success returns every tag currently on that reminder, not just the one just touched. | EventKit has no tags field for reminders at all. This is also the only way to read a **subtask's** tags — `GetReminderTags` below can't see them. |
+| **`GetReminderTags`** | Reads a reminder's current tags (`{"reminder"}`). **Root reminders only** — called on a subtask it returns "not found"; that doesn't mean the subtask is untagged, it means this shortcut can't see it. Use `TagReminder` for a subtask's tags instead. | Same tags gap as above, as a pure read. |
+| **`GetReminderLayout`** | One call returns the whole parent/subtask tree (`{"all", "list_filter"}`). `list_filter` (optional array of exact list titles) scopes the dump — worth passing whenever you don't need every list, since an unscoped `all: true` sweep across everything can be slow enough to time out. Output is newline-delimited JSON, one object per line, not a single document. | EventKit exposes no parent/subtask relationship whatsoever — `list_reminders` returns every reminder as an unrelated flat peer. This is the shortcut to reach for whenever you need the *real* structure. |
+| **`GetReminderLineage`** | Parent and children for one **known root** reminder (`{"reminder"}`). Called on a subtask, returns "not found" — check `IsSubTask` first if you're not sure which a title is. | Same structure gap, for a single targeted lookup instead of a full dump. |
+| **`IsSubTask`** | Fast yes/no: is this title a subtask (`{"subtask", "all"}`)? **Important limit:** a `"No"` covers two different real answers — "this is a root reminder" and "no reminder with this title exists" — and doesn't tell you which. If existence matters, confirm separately. | Lets you route to the right lookup — `GetReminderLineage` (roots) vs. `TagReminder` (subtask tags) — without guessing. |
+| **`SetReminderLineage`** | Nests one reminder under another, or clears a reminder's parent back to root (`{"child", "parent"}` — omit `parent` entirely to detach; don't pass an empty string). This is the only one of the six that **writes**. If `parent` happens to already be nested under something else, the call fails with a generic "not found" message rather than a clear "already a subtask" one — run `IsSubTask` on your intended `parent` first if there's any chance of that. | The same missing-structure gap, but for actually changing it — EventKit's public API has no way to set a reminder's parent at all. |
+
+**A shared helper you install but never call: `GetSubTask`.** `TagReminder` and `GetReminderTags` both call this shortcut internally — it's a private subroutine, not a tool in its own right. It's installed alongside the other ten the same way (drop it into Shortcuts from your config folder), but **don't add it to `RunShortcutsMCP.config`** — the assistant has no reason to call it directly, and it isn't documented as a standalone tool here. If it's missing from your Shortcuts library, `TagReminder` or `GetReminderTags` will fail with a generic Shortcuts error rather than a message that names `GetSubTask` specifically — so if either of those starts failing for no obvious reason, confirm `GetSubTask` is actually installed.
+
+All six reminder shortcuts key off **exact title text**, not a stable ID. If two reminders anywhere share an exact title, results for either one become unreliable — worth checking for duplicates (via `list_reminders`, grouped by title) before leaning on these for a title you haven't seen before.
+
+#### Shortcuts-library housekeeping
+
+| Shortcut | What it does | Notes |
+|---|---|---|
+| **`ShortcutBackup`** | Archives one or more Shortcuts folders to a destination path as a dated `.tar.gz` (`{"destination", "folders"}`). Writes only to the given destination — never touches the Shortcuts library itself. | Its output filename is date-only with no append mode — a second call the same day overwrites the first archive. Rename any existing same-day archive out of the way before running it again. |
 
 ### Format
 

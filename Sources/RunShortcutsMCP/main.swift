@@ -38,11 +38,20 @@ signal(SIGPIPE, SIG_IGN)
 // here must not stop the server from starting.
 let bundleIdentifier = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName
 if let configDirectory = ConfigProvisioner.applicationSupportDirectory(bundleID: bundleIdentifier) {
-    let bundledAssets = [
+    let bundledShortcutNames = [
+        "TagNote", "GetNoteContents", "MoveNote",
+        "TagReminder", "GetReminderTags",
+        // GetSubTask is a private subroutine TagReminder/GetReminderTags call
+        // internally — it must be installed for those two to work, but it is
+        // never invoked directly, so it is deliberately absent from the allowlist example.
+        "GetSubTask",
+        "GetReminderLayout", "GetReminderLineage", "IsSubTask", "SetReminderLineage",
+        "ShortcutBackup"
+    ]
+    let bundledAssets = ([
         Bundle.main.url(forResource: "MANUAL", withExtension: "html"),
-        Bundle.main.url(forResource: "RunShortcutsMCP.config", withExtension: "example"),
-        Bundle.main.url(forResource: "TagNote", withExtension: "shortcut")
-    ].compactMap { $0 }
+        Bundle.main.url(forResource: "RunShortcutsMCP.config", withExtension: "example")
+    ] + bundledShortcutNames.map { Bundle.main.url(forResource: $0, withExtension: "shortcut") }).compactMap { $0 }
     _ = try? ConfigProvisioner.provision(
         into: configDirectory,
         configFileName: AllowlistLocator.configFileName,
