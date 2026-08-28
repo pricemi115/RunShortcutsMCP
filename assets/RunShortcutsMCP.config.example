@@ -9,6 +9,87 @@
         "action": "string, optional: \"add\" (default) or \"remove\""
       },
       "side_effect": true
+    },
+    "GetNoteContents": {
+      "description": "Return an Apple Note's true current content as Markdown, including any live tags — a plain Notes read can miss tags that were just added.",
+      "input": "json",
+      "schema": {
+        "note": "string (exact note title)",
+        "folder": "string (exact folder name)"
+      },
+      "side_effect": false
+    },
+    "MoveNote": {
+      "description": "Move a note between Apple Notes folders. Pass the title of an already-created placeholder note in the destination folder as 'destination', with auto_remove true to delete that placeholder once the move completes.",
+      "input": "json",
+      "schema": {
+        "source": "string (exact title of the note to move)",
+        "destination": "string (exact title of a placeholder note already in the target folder)",
+        "auto_remove": "boolean, optional: delete the placeholder after moving (default false)"
+      },
+      "side_effect": true
+    },
+    "TagReminder": {
+      "description": "Add or remove a live tag on an Apple Reminder (root or subtask) — Apple's Reminders framework has no tags field of its own.",
+      "input": "json",
+      "schema": {
+        "reminder": "string (exact reminder title)",
+        "tag": "string (tag name, no leading #)",
+        "action": "string, optional: \"add\" (default) or \"remove\""
+      },
+      "side_effect": true
+    },
+    "GetReminderTags": {
+      "description": "Read a reminder's current tags. Root reminders only — a subtask returns 'not found' (use TagReminder to read a subtask's tags instead).",
+      "input": "json",
+      "schema": {
+        "reminder": "string (exact reminder title)"
+      },
+      "side_effect": false
+    },
+    "GetReminderLayout": {
+      "description": "One-call dump of the full reminder parent/subtask hierarchy — Apple's Reminders framework doesn't expose parent/child structure at all.",
+      "input": "json",
+      "schema": {
+        "all": "boolean (true = include completed reminders, false = open only)",
+        "list_filter": "array of strings, optional (exact reminder-list titles to scope to; omit for every exposed list)"
+      },
+      "side_effect": false
+    },
+    "GetReminderLineage": {
+      "description": "Parent and children for one known root reminder. Returns 'not found' if the title turns out to be a subtask — check IsSubTask first if you're not sure.",
+      "input": "json",
+      "schema": {
+        "reminder": "string (exact reminder title, must be a root reminder)"
+      },
+      "side_effect": false
+    },
+    "IsSubTask": {
+      "description": "Fast yes/no check for whether a reminder title is a subtask. A 'No' covers both 'this is a root reminder' and 'no reminder with this title exists' — it does not distinguish the two.",
+      "input": "json",
+      "schema": {
+        "subtask": "string (exact reminder title)",
+        "all": "boolean (true = include completed reminders, false = open only)"
+      },
+      "side_effect": false
+    },
+    "SetReminderLineage": {
+      "description": "Nest one reminder under another, or clear a reminder's parent to make it a root again. The only one of the reminder-hierarchy shortcuts that writes.",
+      "input": "json",
+      "schema": {
+        "child": "string (exact reminder title to nest or detach)",
+        "parent": "string, optional (exact title to nest under; omit the key entirely to detach child back to root)"
+      },
+      "side_effect": true
+    },
+    "ShortcutBackup": {
+      "description": "Archive one or more Shortcuts folders to a destination path as a dated .tar.gz. Writes only to the given backup destination — never modifies Shortcuts itself.",
+      "input": "json",
+      "schema": {
+        "destination": "string (folder path to write the archive into)",
+        "folders": "array of strings (exact Shortcuts folder names to back up)"
+      },
+      "side_effect": false
     }
   }
 }

@@ -167,6 +167,35 @@ final class AllowlistTests: XCTestCase {
         XCTAssertEqual(a.maxOutputBytes(for: "Nope"), 10_000_000)
     }
 
+    /// Verifies the split timeout ceiling: a value beyond the synchronous 300s limit
+    /// but within the asynchronous 3600s limit clamps only for `run_shortcut`, and
+    /// resolves unclamped for `run_shortcut_async`.
+    func testAsyncTimeoutRangeIsWiderThanSyncRange() throws {
+        let json = """
+        {
+          "shortcuts": {
+            "AsyncOnly": { "description": "long-running", "timeout_seconds": 900 },
+            "WayTooLong": { "description": "beyond even the async ceiling", "timeout_seconds": 9999 }
+          }
+        }
+        """
+        let a = try Allowlist.decode(Data(json.utf8))
+
+        // Within the async range but beyond the sync range: sync clamps, async doesn't.
+        XCTAssertEqual(a.timeout(for: "AsyncOnly"), 300)
+        XCTAssertEqual(a.asyncTimeout(for: "AsyncOnly"), 900)
+
+        // The advisory warning fires (not a "clamped" warning) and mentions both tools.
+        let warnings = try XCTUnwrap(a.entry(for: "AsyncOnly")).limitWarnings()
+        XCTAssertEqual(warnings.count, 1)
+        XCTAssertTrue(warnings[0].contains("run_shortcut_async"))
+        XCTAssertTrue(warnings[0].contains("900"))
+
+        // Beyond even the async ceiling: both paths clamp, each to their own bound.
+        XCTAssertEqual(a.timeout(for: "WayTooLong"), 300)
+        XCTAssertEqual(a.asyncTimeout(for: "WayTooLong"), 3600)
+    }
+
     /// Verifies out-of-range limits produce warnings (per-entry, aggregated, and in the
     /// `list_shortcuts` payload) while in-range/absent limits produce none.
     func testOutOfRangeLimitsProduceWarnings() throws {

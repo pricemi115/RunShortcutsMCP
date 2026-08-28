@@ -18,6 +18,8 @@ This guide covers installing it, connecting it to Claude, managing your approved
 
 The app talks to Claude Desktop through a small config file.
 
+> These instructions use Claude Desktop, which is what this guide assumes throughout. The helper is a standard MCP server, though, so it works with any app that speaks MCP — the setup is the same idea (point the app at the executable), only the config file and its location differ. Consult that app's documentation for where its MCP settings live.
+
 1. In Claude Desktop, open the **Claude** menu (macOS menu bar) ▸ **Settings…** ▸ **Developer** ▸ **Edit Config**. That opens `claude_desktop_config.json` (creating it if needed). Its location is:
 
    ```
@@ -44,7 +46,7 @@ The app talks to Claude Desktop through a small config file.
 
 4. **Verify:** ask Claude to *"list my shortcuts."* If it returns your approved list, you're connected.
 
-> **Logs, if something's off:** `~/Library/Logs/Claude/mcp-server-run-shortcuts.log` shows anything the helper printed — most often a wrong path to the config file.
+> **Logs, if something's off:** the helper reports problems on its *error output*, and the app you connect it to decides what to do with that. In **Claude Desktop** it's saved to `~/Library/Logs/Claude/`, in a file named after whatever you called the server in the config above — so the `run-shortcuts` entry shown here produces `mcp-server-run-shortcuts.log`. Other MCP apps keep their logs elsewhere (or, in a few cases, throw them away — see §8). The most common thing you'll find there is a wrong path to the config file.
 
 ---
 
@@ -63,7 +65,7 @@ The assistant can run a shortcut **only if it appears in your list**. Anything n
 
   This is a per-user location — your own list, editable without admin rights, and it works no matter where the app itself lives (including a shared `/Applications`). The app discovers it automatically; there's nothing to configure.
 
-  **You don't have to create any of this by hand.** The first time the app runs (when Claude first calls it), it creates this folder, seeds an empty `RunShortcutsMCP.config`, and drops a browser-viewable copy of this manual (`MANUAL.html`), a reference `RunShortcutsMCP.config.example`, and the ready-to-install **`TagNote.shortcut`** right beside it. Just open the config and add your shortcuts (see **Format**, below). To open the folder in Finder:
+  **You don't have to create any of this by hand.** The first time the app runs (when Claude first calls it), it creates this folder, seeds an empty `RunShortcutsMCP.config`, and drops a browser-viewable copy of this manual (`MANUAL.html`), a reference `RunShortcutsMCP.config.example`, and eleven ready-to-install example `.shortcut` files (see "The bundled example shortcuts," just below) right beside it. Just open the config and add your shortcuts (see **Format**, below). To open the folder in Finder:
 
   ```bash
   open ~/Library/Application\ Support/dev.grumptech.runshortcutsmcp
@@ -72,20 +74,49 @@ The assistant can run a shortcut **only if it appears in your list**. Anything n
 - *(Single-user convenience: a `RunShortcutsMCP.config` placed right next to `RunShortcutsMCP.app` also works, and is used only if the Application Support file above isn't present. Never put it **inside** `RunShortcutsMCP.app` — that breaks the app's signature.)*
 - *(Advanced: point `--allowlist` at any path in the Claude config args, as in §2.)*
 
-### The bundled example shortcut (TagNote)
+### The bundled example shortcuts
 
-The default install **includes a ready-to-use shortcut called `TagNote`** — it's the one the example config refers to, and it adds or removes a live tag on an Apple Note (send `"action": "add"` (the default) or `"remove"`). Apple's built-in **Find Notes** action only supports a "contains" match, not an exact one, so `TagNote` separately verifies the note it found matches the requested title exactly — if it doesn't, it returns a clear "not found" error instead of silently tagging the wrong note (or doing nothing).
+The default install **includes ten ready-to-use shortcuts**, covering Apple Notes, Apple Reminders, and Shortcuts-library housekeeping. They're the ones the example config refers to. An eleventh, `GetSubTask`, also comes along — it's a private helper that two of the reminder shortcuts call internally, not one you allowlist or run yourself (see the note under the Reminders table below).
 
-**Where to find it.** A signed `TagNote.shortcut` file ships in two places:
+If you also run **EventKitMCP** (GrumpTech's Calendar/Reminders MCP server) or the **`Read_and_Write_Apple_Notes`** connector, most of these exist specifically to fill gaps neither of those tools can reach on its own — Apple's underlying frameworks (EventKit for Reminders, the Notes AppleScript bridge) simply don't expose certain things through their public APIs: reminders have no tags field and no parent/subtask field at all, and a note's live tags aren't reliably visible through a plain content read. Each entry below says which gap it closes. If you don't use either of those, the notes-and-reminders shortcuts still work standalone; only `ShortcutBackup` has no connection to either.
+
+**Where to find them.** Signed `.shortcut` files ship in two places:
 
 - in the **`Resources`** folder inside the disk image you installed from (the window that opened when you double-clicked the download), and
-- in your config folder, where the app drops a copy on first run:
-  `~/Library/Application Support/dev.grumptech.runshortcutsmcp/TagNote.shortcut`
+- in your config folder, where the app drops a copy of each on first run:
+  `~/Library/Application Support/dev.grumptech.runshortcutsmcp/`
   (open that folder with the `open …` command above).
 
-**How to install it.** Double-click `TagNote.shortcut` in Finder (or drag it onto the Shortcuts app). The Shortcuts app opens and adds it to your library — that's the whole process. Once it's installed *and* listed in your `RunShortcutsMCP.config`, the assistant can run it.
+**How to install one.** Double-click its `.shortcut` file in Finder (or drag it onto the Shortcuts app). The Shortcuts app opens and adds it to your library — that's the whole process. Once it's installed *and* listed in your `RunShortcutsMCP.config`, the assistant can run it. To confirm, ask the assistant to *"list my shortcuts"* — each one you've installed should appear with `installed: true`.
 
-To confirm, ask the assistant to *"list my shortcuts"* — `TagNote` should appear with `installed: true`.
+#### Apple Notes
+
+| Shortcut | What it does | Fills this gap |
+|---|---|---|
+| **`TagNote`** | Adds or removes a live tag on a note (`{"tag", "note", "action"}`, `action` optional, defaults to `"add"`). Verifies the note it found matches the requested title *exactly* — Apple's built-in **Find Notes** action only supports "contains," so without this check a non-unique title could tag the wrong note. Returns a clear "not found" error instead of tagging silently. | The Notes connector can't create a real, filterable tag — writing `#tag` into a note's body via the connector leaves it as literal text, never parsed into a tag. |
+| **`GetNoteContents`** | Returns a note's true current content as Markdown, tags included (`{"note", "folder"}`). | A plain content read can miss a tag that was just added — this is the reliable way to verify a `TagNote` call actually landed. |
+| **`MoveNote`** | Moves a note between folders (`{"source", "destination", "auto_remove"}`). `destination` is the exact title of a **placeholder note already sitting in the target folder** — the shortcut moves `source` there and, if `auto_remove` is true, deletes the placeholder afterward. Always use a *freshly created* placeholder; one that's sat untouched can report a stale folder. | Neither connector can move or delete a note at all. |
+
+#### Apple Reminders
+
+| Shortcut | What it does | Fills this gap |
+|---|---|---|
+| **`TagReminder`** | Adds or removes a live tag on a reminder, root or subtask (`{"reminder", "tag", "action"}`). On success returns every tag currently on that reminder, not just the one just touched. | EventKit has no tags field for reminders at all. This is also the only way to read a **subtask's** tags — `GetReminderTags` below can't see them. |
+| **`GetReminderTags`** | Reads a reminder's current tags (`{"reminder"}`). **Root reminders only** — called on a subtask it returns "not found"; that doesn't mean the subtask is untagged, it means this shortcut can't see it. Use `TagReminder` for a subtask's tags instead. | Same tags gap as above, as a pure read. |
+| **`GetReminderLayout`** | One call returns the whole parent/subtask tree (`{"all", "list_filter"}`). `list_filter` (optional array of exact list titles) scopes the dump — worth passing whenever you don't need every list, since an unscoped `all: true` sweep across everything can be slow enough to time out. Output is newline-delimited JSON, one object per line, not a single document. | EventKit exposes no parent/subtask relationship whatsoever — `list_reminders` returns every reminder as an unrelated flat peer. This is the shortcut to reach for whenever you need the *real* structure. |
+| **`GetReminderLineage`** | Parent and children for one **known root** reminder (`{"reminder"}`). Called on a subtask, returns "not found" — check `IsSubTask` first if you're not sure which a title is. | Same structure gap, for a single targeted lookup instead of a full dump. |
+| **`IsSubTask`** | Fast yes/no: is this title a subtask (`{"subtask", "all"}`)? **Important limit:** a `"No"` covers two different real answers — "this is a root reminder" and "no reminder with this title exists" — and doesn't tell you which. If existence matters, confirm separately. | Lets you route to the right lookup — `GetReminderLineage` (roots) vs. `TagReminder` (subtask tags) — without guessing. |
+| **`SetReminderLineage`** | Nests one reminder under another, or clears a reminder's parent back to root (`{"child", "parent"}` — omit `parent` entirely to detach; don't pass an empty string). This is the only one of the six that **writes**. If `parent` happens to already be nested under something else, the call fails with a generic "not found" message rather than a clear "already a subtask" one — run `IsSubTask` on your intended `parent` first if there's any chance of that. | The same missing-structure gap, but for actually changing it — EventKit's public API has no way to set a reminder's parent at all. |
+
+**A shared helper you install but never call: `GetSubTask`.** `TagReminder` and `GetReminderTags` both call this shortcut internally — it's a private subroutine, not a tool in its own right. It's installed alongside the other ten the same way (drop it into Shortcuts from your config folder), but **don't add it to `RunShortcutsMCP.config`** — the assistant has no reason to call it directly, and it isn't documented as a standalone tool here. If it's missing from your Shortcuts library, `TagReminder` or `GetReminderTags` will fail with a generic Shortcuts error rather than a message that names `GetSubTask` specifically — so if either of those starts failing for no obvious reason, confirm `GetSubTask` is actually installed.
+
+All six reminder shortcuts key off **exact title text**, not a stable ID. If two reminders anywhere share an exact title, results for either one become unreliable — worth checking for duplicates (via `list_reminders`, grouped by title) before leaning on these for a title you haven't seen before.
+
+#### Shortcuts-library housekeeping
+
+| Shortcut | What it does | Notes |
+|---|---|---|
+| **`ShortcutBackup`** | Archives one or more Shortcuts folders to a destination path as a dated `.tar.gz` (`{"destination", "folders"}`). Writes only to the given destination — never touches the Shortcuts library itself. | Its output filename is date-only with no append mode — a second call the same day overwrites the first archive. Rename any existing same-day archive out of the way before running it again. |
 
 ### Format
 
@@ -122,8 +153,8 @@ It's a JSON file. Each entry is keyed by the **exact name** of a Shortcut, with 
 | `description` | text | Plain-English summary of what the shortcut does. The assistant sees this. |
 | `input` | text | A hint about what to send: `"json"`, `"text"`, or `"none"`. Optional. |
 | `schema` | object | For JSON input, a map of field name → description. Optional; documentation only. |
-| `side_effect` | true/false | `true` if the shortcut **changes something** (sends a message, toggles a light, edits a note). When `true`, the assistant must get your explicit OK before running it. Use `false` only for read-only "just tell me something" shortcuts. **If omitted, it defaults to `true`** (confirmation required). |
-| `timeout_seconds` | number | Max seconds the shortcut may run before it's stopped. Optional; default **120**, allowed **5–300** (values outside are clamped). |
+| `side_effect` | true/false | Whether the assistant must ask you again, at the moment it runs. `true` = ask every time; `false` = you've already decided, just run it. Set `false` for anything you want to *just work* — that's the normal case, and it's fine for shortcuts that change things, once you've decided you're happy for them to run on request. Keep `true` for the genuinely consequential ones (messaging other people, spending money, deleting). **If omitted, it defaults to `true`**, so a shortcut you haven't thought about yet prompts rather than running silently. See §7. |
+| `timeout_seconds` | number | Max seconds the shortcut may run before it's stopped. Optional; default **120**. Allowed range depends on how the assistant runs it: **5–300** when it waits for the result directly, **5–3600** (up to an hour) when it runs the shortcut in the background — see "Time and output limits" below. Values outside the allowed range are clamped. |
 | `max_output_bytes` | number | Max bytes of output captured before the result is truncated. Optional; default **10000000** (~10 MB), allowed **1024–100000000** (1 KB–100 MB, clamped). |
 
 ### Changing the list
@@ -201,26 +232,72 @@ Think of it like leaving a voicemail for a robot: it can follow a fixed script p
 
 Every run has two safety limits. Sensible **defaults apply automatically**, and you can **override them per shortcut** in the config (see the field reference in §3):
 
-- **Time limit — default 120 seconds** (`timeout_seconds`; allowed range **5–300**). If a shortcut hasn't finished in this time, the assistant stops it. This mostly catches a shortcut stuck waiting on something (see the headless rule above) or doing too much work.
+- **Time limit — default 120 seconds** (`timeout_seconds`). If a shortcut hasn't finished in this time, the assistant stops it. This mostly catches a shortcut stuck waiting on something (see the headless rule above) or doing too much work. The allowed range depends on how the assistant runs the shortcut — see "Running slow shortcuts in the background," next.
 - **Output limit — default ~10 MB** (`max_output_bytes`; allowed range **1024–100000000** bytes, i.e. 1 KB–100 MB). Output beyond the limit is truncated.
 
 Values outside the allowed range are **clamped** to the nearest bound, so you can't accidentally disable a limit. When a limit kicks in, the assistant sees a short note (e.g. *"timed out after 120s"* or *"output truncated"*). Keep most shortcuts quick and their output modest, and raise a limit only for the specific shortcut that needs it.
 
 If you set a value outside the allowed range, it's clamped **and reported**, so you'll know: it appears next to the shortcut when you ask the assistant to *"list my shortcuts"*, in the result when that shortcut runs, and in the server log.
 
+### Running slow shortcuts in the background
+
+Claude's own connection to the helper has a roughly one-minute limit on any single request — nothing in this app's config can change that. So a shortcut that might take longer than a minute needs to run differently: the assistant starts it, gets back a **job ID** right away, and then checks back on that job ID until it's done, rather than sitting there waiting.
+
+You don't need to do anything to enable this — it's how the assistant is instructed to run shortcuts by default, and it's the reason `timeout_seconds` can go as high as **3600** (one hour) instead of just 300: a background job isn't limited by Claude's one-minute request window the way a direct wait is. If you ask the assistant to run something and it comes back saying it's "still running, checking again," that's this working as intended — not a problem to fix.
+
+A background job's result stays available for about **10 minutes** after it finishes. If the assistant loses track of a job (a very long gap between checks, or a restarted conversation), it's gone for good after that — there's no way to recover an expired result, only to run the shortcut again.
+
 ---
 
 ## 6. Troubleshooting
 
-- **Claude doesn't see the tool.** Fully quit and reopen Claude Desktop. Double-check the `command` path points at `…/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP`. Check the log at `~/Library/Logs/Claude/mcp-server-run-shortcuts.log`.
+- **Claude doesn't see the tool.** Fully quit and reopen Claude Desktop. Double-check the `command` path points at `…/RunShortcutsMCP.app/Contents/MacOS/RunShortcutsMCP`. Then check the helper's log (§2 — for Claude Desktop, `~/Library/Logs/Claude/mcp-server-run-shortcuts.log`).
 - **"… is not on the allowlist."** The shortcut name isn't in your `.config`, or the spelling doesn't match. Add/fix it, then restart Claude.
-- **It runs but hangs, then stops after a while.** The shortcut almost certainly isn't headless (§5) — it's waiting for a person. Remove the interactive action. (The default time limit is 120s; a genuinely slow shortcut can raise it up to 300s with `timeout_seconds` — see "Time and output limits" in §5.)
+- **It runs but hangs, then stops after a while.** The shortcut almost certainly isn't headless (§5) — it's waiting for a person. Remove the interactive action. (The default time limit is 120s; a genuinely slow shortcut can raise it up to 3600s (1 hour) with `timeout_seconds` — see "Time and output limits" in §5.)
 - **The result looks cut off, or mentions "truncated."** The shortcut returned more than the output limit (default ~10 MB). Have it return a smaller, more focused result, or raise `max_output_bytes` (up to 100 MB) for that shortcut.
 - **A "tell me…" shortcut returns nothing.** It's missing a **Stop and Output** / final **Text** action (§4.3).
+- **"Unknown job id" / "its result expired."** A background job's result is only kept for about 10 minutes after it finishes (§5). If the assistant checked back later than that, the result is gone — it needs to run the shortcut again, not keep asking about the old job.
 - **Permission errors.** Check **System Settings ▸ Privacy & Security ▸ Automation** and the relevant app (Notes, Calendar, etc.).
 
 ---
 
 ## 7. Why the allowlist matters (security)
 
-Apple Shortcuts can do powerful things — send messages, control your home, move files. This app deliberately runs **only** what you list, and requires your confirmation for anything marked `side_effect`. Keep your `.config` small and intentional: add a shortcut only when you're comfortable with the assistant being able to run it.
+**The list is where you give permission.** That's the whole design, and it's worth being explicit about it, because it's different from how most apps ask.
+
+The point of this tool is to *remove* friction — to let you say "file that note" and have it happen. An app that stopped to ask every single time would defeat its own purpose, so this one doesn't. Instead, you make the decision **once, deliberately, in advance**, by putting a shortcut in your `.config`. Everything not on that list is refused outright, no questions asked.
+
+`side_effect` is a second, optional checkpoint on top of that, for the few shortcuts where you want to be asked again at the moment it runs. It defaults to `true` — a shortcut you haven't thought about yet gets a prompt rather than silently running. But **it is entirely normal, and expected, for most of your shortcuts to end up marked `side_effect: false`** and to run without prompting. That's the tool working as intended, not a corner being cut. Reserve `true` for the genuinely consequential ones — sending something to another person, spending money, deleting things.
+
+Because permission is front-loaded, the quality of your list is doing the real work. Three things worth weighing before adding an entry:
+
+- **Assume it can run at any time, on input you didn't choose.** The assistant decides when to call a shortcut and what to pass it. A shortcut that takes a file path, a URL, or a recipient is more powerful than it looks, because it's the assistant filling those in.
+- **A shortcut that *reads* untrusted content is a way in, not just a way out.** Whatever it returns — the body of a note, an email, a web page — lands in front of the assistant alongside your instructions. If someone else can influence that text, they get a voice in your assistant's context. Be as thoughtful allowlisting a reader as an editor.
+- **Cancelling probably won't stop it.** Cancelling a run, or hitting the time limit, stops the small command that launched the shortcut; the Shortcuts app keeps running the shortcut itself. Expect anything already started to finish.
+
+One thing to know about the `side_effect` prompt specifically: this app runs invisibly in the background and has no way to put a dialog on your screen, so it can't verify you were actually asked — it refuses the run unless the assistant states you approved. Against a well-behaved assistant that reliably prevents accidents, which is what it's for. It is not a lock against one that has been tricked. That's another reason the list, not the prompt, is the control that counts.
+
+Automation always trades some safety for leverage. Keeping the list short, specific, and reviewed now and then is how you stay on the right side of that trade.
+
+---
+
+## 8. Checking what actually ran (the activity log)
+
+The helper writes a line every time it runs a shortcut and every time it refuses one. This is how you find out after the fact what your assistant actually did — useful when something happened you didn't expect, and the only place that information exists.
+
+Each line is a small chunk of JSON, one per event:
+
+```json
+{"confirm":true,"event":"run","job_id":"job_1a2b3c4d","shortcut":"TagNote","side_effect":true,"tool":"run_shortcut_async","ts":"2026-08-25T10:56:44Z"}
+{"event":"refused","reason":"not_allowlisted","shortcut":"SomethingElse","tool":"run_shortcut","ts":"2026-08-25T10:57:02Z"}
+```
+
+What's worth looking for:
+
+- **`"event":"run"` with `"side_effect":true` and `"confirm":true`** — a shortcut that changes something ran because the assistant said you approved it. If you don't remember being asked, that's worth knowing.
+- **`"reason":"needs_confirmation"` followed moments later by a `run` of the same shortcut with `"confirm":true`** — the app asked for approval and the assistant answered it. Whether *you* were asked in between is the interesting question.
+- **Repeated `"reason":"not_allowlisted"`** — something is trying shortcut names that aren't on your list.
+
+**Where it goes.** The helper writes these to its *error output*, and the app you connect it to decides what becomes of that. In **Claude Desktop** they're saved under `~/Library/Logs/Claude/`, in a file named after whatever you called the server in your config (the `run-shortcuts` example in §2 gives `mcp-server-run-shortcuts.log`). Other MCP apps put their logs elsewhere — and it's worth knowing that **an app which discards its servers' error output leaves you with no record at all.** If this log matters to you, check where your app keeps it before relying on it.
+
+**What's never written.** The *input* sent to a shortcut is deliberately left out — it can contain personal content (note text, message bodies, file paths), and what matters for review is which shortcuts ran, not what was passed to them. The log also doesn't record what a shortcut *returned*.

@@ -4,12 +4,26 @@ A small, signed macOS MCP server (Swift) that lets an MCP client (e.g. Claude) r
 
 ## Design in one breath
 
-Two tools over stdio:
+Six tools over stdio:
 
 - `list_shortcuts` — returns the allowlisted shortcuts (description, input schema, `side_effect`, and whether each is currently installed).
-- `run_shortcut(name, input?, confirm?)` — runs `shortcuts run "<name>"`, piping `input` to stdin, returns `{ exit_code, stdout, stderr }`.
+- `run_shortcut(name, input?, confirm?)` — runs `shortcuts run "<name>"`, piping `input` to stdin, and blocks until it finishes, returning `{ exit_code, stdout, stderr, timed_out }`. Behaviourally unchanged from 1.1.x. Only suitable for shortcuts that finish well inside the MCP client's own request timeout (~60s in Claude Desktop); anything slower must use `run_shortcut_async`.
+- `run_shortcut_async(name, input?, confirm?)` — starts a shortcut in the background and returns a `job_id` immediately, with no duration limit. **This is the recommended way to run any shortcut**, not just slow ones.
+- `get_shortcut_result(job_id, wait_seconds?)` — polls a background job; waits up to `wait_seconds` (default 45, max 50) for it to finish, then reports its state and, once terminal, the captured output.
+- `cancel_shortcut_job(job_id)` — stops a queued or running background job.
+- `list_shortcut_jobs()` — lists tracked background jobs, to recover a lost `job_id`.
 
-Safety is the point: **default-deny allowlist.** Only shortcuts in the config are runnable, and any flagged `side_effect` refuse to run unless the caller passes `confirm: true` (the client is expected to get the user's OK first).
+`run_shortcut` and `run_shortcut_async` share the same allowlist and `side_effect` gate. Async jobs exist because Claude Desktop's MCP client enforces its own ~60s request timeout that no server-side configuration can override — a single `tools/call` can never safely block longer than that, regardless of what the underlying shortcut needs.
+
+Safety is the point: **default-deny allowlist.** Only shortcuts in the config are runnable, and any flagged `side_effect` refuse to run unless the caller passes `confirm: true` (the client is expected to get the user's OK first) — checked once, at submission, for both run tools; none of the read-only or cancellation tools can cause a shortcut to execute.
+
+**The allowlist is the consent mechanism**, and it's deliberate that it works that way: permission is granted once, in advance, by editing the config — not re-litigated on every call. This is a workflow tool, and one that prompted on every use would defeat its own purpose. `side_effect` is an optional second checkpoint for the subset of shortcuts that warrant one; it defaults to `true` so an unconsidered entry prompts, but most entries are expected to end up `false` and run unattended.
+
+Three limits of that model, stated plainly because they shape what is safe to allowlist:
+
+- **The `side_effect` checkpoint is delegated, not verified.** The server is headless and cannot tell whether a human actually approved — `confirm: true` is an assertion by the client and the assistant, and a client that always sends it bypasses the checkpoint entirely. It reliably prevents *accidental* runs by a cooperative assistant; it is not a defence against a compromised one. The allowlist, not the checkpoint, is the boundary that counts.
+- **A shortcut's output is text the assistant reads.** If an allowlisted shortcut returns data an attacker can influence (a note, a web page, an email body), that text reaches the model alongside its own instructions. Treat a read-only shortcut over untrusted data as a channel into the assistant, not just a way out of it.
+- **Your blast radius is the least careful shortcut on the list.** This isn't sandboxed and runs with your privileges; `input` is fully assistant-controlled. A single allowlisted shortcut that accepts a file path or URL is effectively a general-purpose primitive. Keep the list short and specific.
 
 No third-party build tooling — plain Swift Package Manager (`swift build`). The shipped binary's only dependency is the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk). A separate build-time tool (`md2html`) uses Apple's [swift-markdown](https://github.com/swiftlang/swift-markdown) to render the manual to HTML; it lives in its own targets and is never linked into the distributed executable.
 
@@ -21,15 +35,15 @@ No third-party build tooling — plain Swift Package Manager (`swift build`). Th
 ## Layout
 
 ```
-Sources/RunShortcutsCore/   # pure logic: allowlist model, process runner, path resolver, provisioner
+Sources/RunShortcutsCore/   # pure logic: allowlist model, process runner, background job store, wire payloads, path resolver, provisioner
 Sources/RunShortcutsMCP/    # main.swift: wires the core to the MCP server
 Sources/MarkdownHTML/       # build-time only: Markdown → HTML renderer (uses swift-markdown)
 Sources/md2html/            # build-time only: CLI that renders assets/MANUAL.md → MANUAL.html
 Tests/RunShortcutsCoreTests # unit tests for the allowlist/authorization/provisioning logic
 Tests/MarkdownHTMLTests     # unit tests for the Markdown → HTML renderer
 packaging/                  # Info.plist + entitlements for the .app bundle
-scripts/                    # build-app.sh, build-dmg.sh, notarize.sh
-assets/                     # deployable inputs: MANUAL.md (source), RunShortcutsMCP.config.example, TagNote.shortcut
+scripts/                    # build-app.sh, build-dmg.sh, notarize.sh, smoke-test.py
+assets/                     # deployable inputs: MANUAL.md (source), RunShortcutsMCP.config.example, 11 example .shortcut files (1 is an internal helper, not directly callable)
 ```
 
 The manual is authored in `assets/MANUAL.md` (the maintainable source) and rendered to `MANUAL.html` at build time so end users can open it in any browser without a Markdown viewer.
@@ -51,7 +65,21 @@ swift build
 swift test
 ```
 
-## Make the signed .app (milestone 1)
+`swift test` covers `RunShortcutsCore`. The MCP wire layer (tool declarations,
+argument decoding, response shapes) lives in top-level executable code with no
+test target, so it has a separate protocol-level smoke test that drives a built
+binary over real JSON-RPC:
+
+```bash
+./scripts/build-app.sh release && python3 scripts/smoke-test.py
+```
+
+Safe by default — it exercises the job pipeline with a nonexistent shortcut name,
+so nothing on the machine runs. Pass `--slow-shortcut <name>` (any allowlisted,
+side-effect-free shortcut taking >30s) to additionally enable the `wait_seconds`
+timing checks, which are skipped otherwise. See `CONTRIBUTING.md` for why it exists.
+
+## Make the signed .app
 
 ```bash
 export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
@@ -75,7 +103,7 @@ The server resolves its allowlist path in this order:
 
 If none of these resolve, the server **fails closed** — it refuses to start rather than falling back to an `allowlist.json` in the current working directory.
 
-The deployable inputs live in `assets/` (`MANUAL.md`, `RunShortcutsMCP.config.example`, `TagNote.shortcut`); the build scripts render the manual to `MANUAL.html` and bundle everything into the app and the installer. See `assets/MANUAL.md` for the end-user walkthrough.
+The deployable inputs live in `assets/` (`MANUAL.md`, `RunShortcutsMCP.config.example`, and eleven example `.shortcut` files covering Apple Notes, Apple Reminders, and Shortcuts-library housekeeping — ten directly callable, plus `GetSubTask`, a private helper `TagReminder`/`GetReminderTags` depend on internally); the build scripts render the manual to `MANUAL.html` and bundle everything into the app and the installer. See `assets/MANUAL.md` for the end-user walkthrough, including what each example shortcut does.
 
 ## Register with the MCP client
 
@@ -93,9 +121,9 @@ Point the client at the **bundled** executable (not a bare `.build` binary) so T
 
 To use an allowlist elsewhere, add `"args": ["--allowlist", "/full/path/to/RunShortcutsMCP.config"]`.
 
-### Milestone-1 check
+### Smoke check
 
-Ask the client to call `list_shortcuts`. If it returns your allowlisted entries (with `installed: true/false`), the bundle + permission + process-spawn path all work. Then wire up `TagNote` via `run_shortcut`.
+Ask the client to call `list_shortcuts`. If it returns your allowlisted entries (with `installed: true/false`), the bundle + permission + process-spawn path all work. Then try `TagNote` via `run_shortcut_async`.
 
 ## Distribution: Developer ID + notarization (not the App Store)
 
@@ -178,9 +206,9 @@ Prefer Xcode's build system? Open `Package.swift` directly in Xcode (File ▸ Op
 
 ## Notes / caveats (verify on build)
 
-- **SDK API**: written against the MCP Swift SDK 0.11.x server API (`Server`, `StdioTransport`, `withMethodHandler(ListTools/CallTool)`, `Tool(inputSchema:)`). Pre-1.0 minor versions can introduce breaking changes; if `server.start` shifts, adjust `main.swift`. The process is kept alive with a sleep loop (no reliance on version-specific helpers); the client terminates the subprocess on disconnect.
+- **SDK API**: written against the MCP Swift SDK 0.12.x server API (`Server`, `StdioTransport`, `withMethodHandler(ListTools/CallTool)`, `Tool(inputSchema:annotations:)`). Pre-1.0 minor versions can introduce breaking changes; if `server.start` shifts, adjust `main.swift`. The process is kept alive with a sleep loop (no reliance on version-specific helpers); `SIGTERM`/`SIGINT` cancel any tracked background jobs before exit, and the client terminates the subprocess on disconnect otherwise.
 - **GUI flash**: `shortcuts run` can briefly surface the Shortcuts app. Keep allowlisted shortcuts headless-safe (no interactive prompts) so runs don't hang.
-- **Subprocess safety**: the runner drains stdout/stderr concurrently, enforces a wall-clock timeout (default 120s; SIGTERM then SIGKILL) and caps captured output per stream (default 10 MB), so a hung or noisy shortcut can't wedge the server or exhaust memory. Both are overridable per shortcut in the config (`timeout_seconds` 5–300; `max_output_bytes` 1 KB–100 MB; out-of-range values are clamped). Calls are still synchronous per request.
+- **Subprocess safety**: the runner drains stdout/stderr concurrently and asynchronously (a run never blocks a cooperative thread), enforces a wall-clock timeout (default 120s; SIGTERM then SIGKILL) and caps captured output per stream (default 10 MB), so a hung or noisy shortcut can't wedge the server or exhaust memory. Both are overridable per shortcut in the config (`timeout_seconds` — 5–300 for `run_shortcut`, 5–3600 for `run_shortcut_async`; `max_output_bytes` 1 KB–100 MB; out-of-range values are clamped). Background jobs run up to 4 at a time and are reaped ~10 minutes after finishing.
 - **Notarization**: only needed to distribute to other Macs. For local use, a Developer ID signature is enough.
 
 ## Installer (.dmg)
@@ -193,9 +221,9 @@ export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 ./scripts/build-dmg.sh             # → build/RunShortcutsMCP.dmg (signed + notarized)
 ```
 
-The DMG is signed with the same **Developer ID Application** cert as the app (no separate installer certificate) and notarized/stapled using the same credentials as `notarize.sh`. The disk image shows the app and a drag-to-`/Applications` shortcut at the top level, with the manual (`MANUAL.html`), a reference config, and the example **`TagNote.shortcut`** tucked into a `Resources/` folder.
+The DMG is signed with the same **Developer ID Application** cert as the app (no separate installer certificate) and notarized/stapled using the same credentials as `notarize.sh`. The disk image shows the app and a drag-to-`/Applications` shortcut at the top level, with the manual (`MANUAL.html`), a reference config, and the eleven example `.shortcut` files tucked into a `Resources/` folder.
 
-**First-run provisioning.** Users don't set up the config by hand. The first time the app runs (when the MCP client first launches it), it creates `~/Library/Application Support/<bundle-id>/`, seeds an empty (default-deny) `RunShortcutsMCP.config`, and drops `MANUAL.html`, `RunShortcutsMCP.config.example`, and `TagNote.shortcut` beside it for reference. The user just edits the config.
+**First-run provisioning.** Users don't set up the config by hand. The first time the app runs (when the MCP client first launches it), it creates `~/Library/Application Support/<bundle-id>/`, seeds an empty (default-deny) `RunShortcutsMCP.config`, and drops `MANUAL.html`, `RunShortcutsMCP.config.example`, and all eleven example `.shortcut` files beside it for reference. The user just edits the config.
 
 ## License
 

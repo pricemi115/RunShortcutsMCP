@@ -39,12 +39,20 @@ VERSION_STR="$(tr -d ' \t\r\n' < VERSION)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION_STR" "$APP/Contents/Info.plist"
 echo "Stamped version: $VERSION_STR"
 
-# Bundle the (HTML) manual + example config so the app can self-provision them
-# into the per-user config folder on first run. Copied before signing so they're
-# inside the signed bundle.
+# Bundle the (HTML) manual + example config + example shortcuts so the app can
+# self-provision them into the per-user config folder on first run. Copied
+# before signing so they're inside the signed bundle.
+EXAMPLE_SHORTCUTS=(
+    TagNote GetNoteContents MoveNote
+    TagReminder GetReminderTags GetSubTask
+    GetReminderLayout GetReminderLineage IsSubTask SetReminderLineage
+    ShortcutBackup
+)
 cp build/MANUAL.html "$APP/Contents/Resources/MANUAL.html"
 cp assets/RunShortcutsMCP.config.example "$APP/Contents/Resources/RunShortcutsMCP.config.example"
-cp assets/TagNote.shortcut "$APP/Contents/Resources/TagNote.shortcut"
+for name in "${EXAMPLE_SHORTCUTS[@]}"; do
+    cp "assets/$name.shortcut" "$APP/Contents/Resources/$name.shortcut"
+done
 
 if [[ -n "$SIGN_ID" ]]; then
     codesign --force --options runtime \
@@ -61,8 +69,10 @@ fi
 # bundle so they stay editable and don't affect the signature). MANUAL.html was
 # already rendered into build/ above.
 cp assets/RunShortcutsMCP.config.example "build/RunShortcutsMCP.config.example"
-cp assets/TagNote.shortcut build/
+for name in "${EXAMPLE_SHORTCUTS[@]}"; do
+    cp "assets/$name.shortcut" build/
+done
 
 echo "Built: $APP"
 echo "Executable for MCP config: $ROOT/$APP/Contents/MacOS/$APP_NAME"
-echo "Distributables in build/: $APP_NAME.app, MANUAL.html, RunShortcutsMCP.config.example, TagNote.shortcut"
+echo "Distributables in build/: $APP_NAME.app, MANUAL.html, RunShortcutsMCP.config.example, ${EXAMPLE_SHORTCUTS[*]/%/.shortcut}"
