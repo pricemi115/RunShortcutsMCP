@@ -44,7 +44,12 @@ Tests/MarkdownHTMLTests     # unit tests for the Markdown → HTML renderer
 packaging/                  # Info.plist + entitlements for the .app bundle
 scripts/                    # build-app.sh, build-dmg.sh, notarize.sh, smoke-test.py
 assets/                     # deployable inputs: MANUAL.md (source), RunShortcutsMCP.config.example, 11 example .shortcut files (1 is an internal helper, not directly callable)
+design/                     # software design docs: architecture, class + sequence diagrams (Mermaid), security model, maintenance guide
 ```
+
+Design documentation for maintainers — architecture, class and sequence
+diagrams, the security model, and a maintenance runbook — lives in
+[`design/`](design/README.md).
 
 The manual is authored in `assets/MANUAL.md` (the maintainable source) and rendered to `MANUAL.html` at build time so end users can open it in any browser without a Markdown viewer.
 
