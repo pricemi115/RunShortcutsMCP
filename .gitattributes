@@ -1,0 +1,113 @@
+# =============================================================================
+# .gitattributes
+# Line-ending normalization and Git LFS tracking for binary assets.
+# Extension patterns use bracket notation (e.g. [Pp][Nn][Gg]) to match any
+# combination of upper and lower case on case-sensitive filesystems (Linux).
+# =============================================================================
+# ---------------------------------------------------------------------------
+# Default: auto-detect text vs binary; normalize line endings to LF in the
+# repo, check out with native line endings on each platform.
+# ---------------------------------------------------------------------------
+* text=auto eol=lf
+# ---------------------------------------------------------------------------
+# Explicit text files — force LF in repo and on checkout regardless of OS.
+# ---------------------------------------------------------------------------
+*.[Cc][Ss]                                          text eol=lf
+*.[Cc][Ss][Pp][Rr][Oo][Jj]                         text eol=lf
+*.[Ss][Ll][Nn]                                      text eol=lf
+*.[Jj][Ss][Oo][Nn]                                  text eol=lf
+*.[Mm][Dd]                                          text eol=lf
+*.[Tt][Xx][Tt]                                      text eol=lf
+*.[Ss][Hh]                                          text eol=lf
+*.[Yy][Mm][Ll]                                      text eol=lf
+*.[Yy][Aa][Mm][Ll]                                  text eol=lf
+*.[Xx][Mm][Ll]                                      text eol=lf
+*.[Pp][Rr][Oo][Pp][Ss]                              text eol=lf
+*.[Tt][Aa][Rr][Gg][Ee][Tt][Ss]                      text eol=lf
+*.[Cc][Oo][Nn][Ff][Ii][Gg]                          text eol=lf
+.gitignore                                          text eol=lf
+.editorconfig                                       text eol=lf
+# ---------------------------------------------------------------------------
+# Binary files — mark explicitly so git never tries to diff or merge them.
+# ---------------------------------------------------------------------------
+# Images
+*.[Pp][Nn][Gg]                                      binary
+*.[Jj][Pp][Gg]                                      binary
+*.[Jj][Pp][Ee][Gg]                                  binary
+*.[Gg][Ii][Ff]                                      binary
+*.[Ii][Cc][Oo]                                      binary
+*.[Bb][Mm][Pp]                                      binary
+*.[Tt][Ii][Ff][Ff]                                  binary
+*.[Ww][Ee][Bb][Pp]                                  binary
+# Fonts
+*.[Tt][Tt][Ff]                                      binary
+*.[Oo][Tt][Ff]                                      binary
+*.[Ww][Oo][Ff][Ff]                                  binary
+*.[Ww][Oo][Ff][Ff]2                                 binary
+# Archives
+*.[Zz][Ii][Pp]                                      binary
+*.[Tt][Aa][Rr]                                      binary
+*.[Gg][Zz]                                          binary
+*.7[Zz]                                             binary
+*.[Rr][Aa][Rr]                                      binary
+# Compiled artifacts
+*.[Ee][Xx][Ee]                                      binary
+*.[Dd][Ll][Ll]                                      binary
+*.[Pp][Dd][Bb]                                      binary
+*.[Ss][Oo]                                          binary
+*.[Dd][Yy][Ll][Ii][Bb]                              binary
+# Documents
+*.[Pp][Dd][Ff]                                      binary
+*.[Dd][Oo][Cc][Xx]                                  binary
+*.[Xx][Ll][Ss][Xx]                                  binary
+*.[Pp][Pp][Tt][Xx]                                  binary
+# Databases
+*.[Dd][Bb]                                          binary
+*.[Ss][Qq][Ll][Ii][Tt][Ee]                          binary
+# Certificates / keys
+*.[Pp]12                                            binary
+*.[Pp][Ff][Xx]                                      binary
+*.[Cc][Ee][Rr]                                      binary
+*.[Dd][Ee][Rr]                                      binary
+# ---------------------------------------------------------------------------
+# Git LFS — large or binary assets tracked in object storage rather than
+# the repo pack files. Add patterns here as the project acquires assets.
+# ---------------------------------------------------------------------------
+# Images
+*.[Pp][Nn][Gg]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Jj][Pp][Gg]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Jj][Pp][Ee][Gg]                                  filter=lfs diff=lfs merge=lfs -text
+*.[Gg][Ii][Ff]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Ii][Cc][Oo]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Bb][Mm][Pp]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Tt][Ii][Ff][Ff]                                  filter=lfs diff=lfs merge=lfs -text
+*.[Ww][Ee][Bb][Pp]                                  filter=lfs diff=lfs merge=lfs -text
+*.[Ss][Vv][Gg]                                      filter=lfs diff=lfs merge=lfs -text
+# Fonts
+*.[Tt][Tt][Ff]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Oo][Tt][Ff]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Ww][Oo][Ff][Ff]                                  filter=lfs diff=lfs merge=lfs -text
+*.[Ww][Oo][Ff][Ff]2                                 filter=lfs diff=lfs merge=lfs -text
+# Archives
+*.[Zz][Ii][Pp]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Tt][Aa][Rr]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Gg][Zz]                                          filter=lfs diff=lfs merge=lfs -text
+*.7[Zz]                                             filter=lfs diff=lfs merge=lfs -text
+*.[Rr][Aa][Rr]                                      filter=lfs diff=lfs merge=lfs -text
+# Compiled artifacts
+*.[Ee][Xx][Ee]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Dd][Ll][Ll]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Pp][Dd][Bb]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Ss][Oo]                                          filter=lfs diff=lfs merge=lfs -text
+*.[Dd][Yy][Ll][Ii][Bb]                              filter=lfs diff=lfs merge=lfs -text
+# Documents
+*.[Pp][Dd][Ff]                                      filter=lfs diff=lfs merge=lfs -text
+*.[Dd][Oo][Cc][Xx]                                  filter=lfs diff=lfs merge=lfs -text
+*.[Xx][Ll][Ss][Xx]                                  filter=lfs diff=lfs merge=lfs -text
+*.[Pp][Pp][Tt][Xx]                                  filter=lfs diff=lfs merge=lfs -text
+# Databases
+*.[Dd][Bb]                                          filter=lfs diff=lfs merge=lfs -text
+*.[Ss][Qq][Ll][Ii][Tt][Ee]                          filter=lfs diff=lfs merge=lfs -text
+
+# Apple Files
+*.shortcut                                          filter=lfs diff=lfs merge=lfs -text
