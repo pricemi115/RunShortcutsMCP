@@ -1,5 +1,7 @@
 # RunShortcutsMCP
 
+> **Notice: this repository is no longer actively developed.** Future development is moving to a private repository. This repo is archived as the final public snapshot (tag `v1.2.0-final-public`) and remains available under the Apache License 2.0, which is unchanged.
+
 A small, signed macOS MCP server (Swift) that lets an MCP client (e.g. Claude) run **allowlisted** Apple Shortcuts by name and read their output. It's a general bridge to the Shortcuts automation surface — the first consumer is a `TagNote` shortcut that applies live Apple Notes tags.
 
 ## Design in one breath
